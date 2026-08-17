@@ -1,0 +1,261 @@
+# PointDiT Stage 2: 512x512 fine-tuning mixture (the released 512 checkpoints).
+#
+# 11 synthetic datasets. `weight` is a sampling probability, independent of corpus
+# size; the weights below sum to 1.00. NOTE: `tartanairv2` is the dataset the paper
+# calls TartanGround. Each `data_path` is datasets/train/<name>; see ../../DATASETS.md
+# for the layout each loader expects under that root.
+#
+# Domain balance:
+#   outdoor ground-level 58% (vkitti2 + urbansyn + synscapes + omniworldgame + eden + mvssynth)
+#   aerial               25% (tartanair + tartanairv2)
+#   indoor               17% (hypersim + irs + dynamic_replica)
+#
+# `sky_loss_weight` below is parsed but not forwarded to the loader -- set the sky
+# loss from the CLI with --sky_loss_weight.
+
+finetune_highres_mode: true
+finetune_target_height: 512
+finetune_target_crop: 512
+img_size: 512
+
+datasets:
+  - name: hypersim
+    data_path: datasets/train/hypersim
+    max_depth: 30.0
+    weight: 0.12
+
+    # Sky handling (mostly indoor scenes)
+    handle_sky: false
+    use_sky_dome: false
+    sky_loss_weight: 0.0
+
+    # Outlier removal
+    remove_outliers: true
+    outlier_threshold: 3.0
+
+    # Scale factor computation
+    compute_scale_factor_only_valid: true
+    compute_scale_factor_use_std: false
+
+    clamp_max_depth: null
+    num_test_scenes: 0
+
+  - name: vkitti2
+    data_path: datasets/train/vkitti2
+    max_depth: 100.0
+    weight: 0.14
+
+    # Sky handling for outdoor scenes
+    handle_sky: true
+    use_sky_dome: true
+    sky_loss_weight: 0.01
+    sky_far_plane_value: 3.0
+
+    # Outlier removal
+    remove_outliers: true
+    outlier_threshold: 3.0
+
+    # Scale factor computation
+    compute_scale_factor_only_valid: true
+    compute_scale_factor_use_std: false
+
+    clamp_max_depth: null
+    num_test_scenes: 0
+
+  - name: urbansyn
+    data_path: datasets/train/urbansyn
+    max_depth: 100.0
+    weight: 0.05
+
+    # Sky handling for outdoor urban scenes
+    handle_sky: true
+    use_sky_dome: true
+    sky_loss_weight: 0.01
+    sky_far_plane_value: 3.0
+
+    # Outlier removal
+    remove_outliers: true
+    outlier_threshold: 3.0
+
+    # Scale factor computation
+    compute_scale_factor_only_valid: true
+    compute_scale_factor_use_std: false
+
+    clamp_max_depth: null
+    num_test_scenes: 0
+
+  - name: synscapes
+    data_path: datasets/train/synscapes
+    max_depth: 100.0
+    weight: 0.09
+
+    # Sky handling for outdoor/urban driving scenes
+    handle_sky: true
+    use_sky_dome: true
+    sky_loss_weight: 0.01
+    sky_far_plane_value: 3.0
+
+    # Outlier removal
+    remove_outliers: true
+    outlier_threshold: 3.0
+
+    # Scale factor computation
+    compute_scale_factor_only_valid: true
+    compute_scale_factor_use_std: false
+
+    clamp_max_depth: null
+    num_test_scenes: 0
+
+  - name: tartanair
+    data_path: datasets/train/tartanair
+    max_depth: 100.0
+    weight: 0.10
+
+    # Sky handling (outdoor scenes with sky)
+    handle_sky: true
+    use_sky_dome: true
+    sky_loss_weight: 0.01
+    sky_far_plane_value: 3.0
+
+    # Outlier removal
+    remove_outliers: true
+    outlier_threshold: 3.0
+
+    # Scale factor computation
+    compute_scale_factor_only_valid: true
+    compute_scale_factor_use_std: false
+
+    clamp_max_depth: null
+    num_test_scenes: 0
+
+  - name: omniworldgame
+    data_path: datasets/train/omniworldgame
+    max_depth: 100.0
+    weight: 0.19
+
+    # Sky handling for outdoor game environments
+    handle_sky: true
+    use_sky_dome: true
+    sky_loss_weight: 0.01
+    sky_far_plane_value: 3.0
+
+    remove_outliers: true
+    outlier_threshold: 3.0
+
+    # Scale factor computation
+    compute_scale_factor_only_valid: true
+    compute_scale_factor_use_std: false
+
+    clamp_max_depth: null
+    num_test_scenes: 0
+
+  - name: eden
+    data_path: datasets/train/eden
+    max_depth: 100.0
+    weight: 0.05
+
+    # Sky handling for outdoor scenes
+    handle_sky: true
+    use_sky_dome: true
+    sky_loss_weight: 0.01
+    sky_far_plane_value: 3.0
+
+    # Outlier removal
+    remove_outliers: true
+    outlier_threshold: 3.0
+
+    # Scale factor computation
+    compute_scale_factor_only_valid: true
+    compute_scale_factor_use_std: false
+
+    clamp_max_depth: null
+    num_test_scenes: 0
+
+  - name: irs
+    data_path: datasets/train/irs
+    max_depth: 30.0
+    weight: 0.02
+
+    # Sky handling: DISABLED (indoor synthetic scenes)
+    handle_sky: false
+    use_sky_dome: false
+    sky_loss_weight: 0.0
+
+    # Outlier removal
+    remove_outliers: true
+    outlier_threshold: 3.0
+
+    # Scale factor computation (synthetic data)
+    compute_scale_factor_only_valid: true
+    compute_scale_factor_use_std: false
+
+    # Depth clamping
+    clamp_max_depth: null
+
+    # No train/test split - use all data for training
+    num_test_scenes: 0
+
+  - name: dynamic_replica
+    data_path: datasets/train/dynamic_replica
+    max_depth: 10.0
+    weight: 0.03
+
+    # Sky handling: DISABLED (indoor synthetic scenes)
+    handle_sky: false
+    use_sky_dome: false
+    sky_loss_weight: 0.0
+
+    # Outlier removal
+    remove_outliers: true
+    outlier_threshold: 3.0
+
+    # Scale factor computation (synthetic data)
+    compute_scale_factor_only_valid: true
+    compute_scale_factor_use_std: false
+
+    # Depth clamping
+    clamp_max_depth: null
+
+  - name: mvssynth
+    data_path: datasets/train/mvssynth
+    max_depth: 100.0
+    weight: 0.06
+
+    # Sky handling for outdoor/urban scenes (GTAV-based synthetic)
+    handle_sky: true
+    use_sky_dome: true
+    sky_loss_weight: 0.01
+    sky_far_plane_value: 3.0
+
+    # Outlier removal
+    remove_outliers: true
+    outlier_threshold: 3.0
+
+    # Scale factor computation
+    compute_scale_factor_only_valid: true
+    compute_scale_factor_use_std: false
+
+    clamp_max_depth: null
+    num_test_scenes: 0
+
+  - name: tartanairv2
+    data_path: datasets/train/tartanairv2
+    max_depth: 100.0
+    weight: 0.15
+
+    # Sky handling (outdoor scenes with sky)
+    handle_sky: true
+    use_sky_dome: true
+    sky_loss_weight: 0.01
+    sky_far_plane_value: 3.0
+
+    # Outlier removal
+    remove_outliers: true
+    outlier_threshold: 3.0
+
+    # Scale factor computation
+    compute_scale_factor_only_valid: true
+    compute_scale_factor_use_std: false
+
+    clamp_max_depth: null
+    num_test_scenes: 0

@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+
+# Zero-shot benchmark: PointDiT-B at 512x512, 1-step sampling, 7 datasets (3,444 samples).
+# Drop --eval_no_save_gen to also write depth panels and point clouds
+
+cd "$(dirname "$0")/.."
+
+CHECKPOINT=pretrained/pointditb-512.pth
+EVAL_DATA=datasets/eval
+
+python main.py \
+--model PointDiT-B/16 --feature_embedding_type dinov3_vitb16 --proj_dropout 0.0 \
+--evaluate_gen --eval_no_save_gen \
+--img_size 512 --eval_depth_resize_height 512 --num_sampling_steps 1 \
+--eval_depth_dataset --eval_depth_data_root ${EVAL_DATA} \
+--eval_depth_dataset_name DIODE,KITTI,NYUv2,ETH3D,HAMMER,iBims-1,Booster \
+--eval_boundary_datasets HAMMER,iBims-1,Booster \
+--pretrained ${CHECKPOINT}

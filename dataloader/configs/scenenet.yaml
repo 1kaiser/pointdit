@@ -1,0 +1,21 @@
+# SceneNet-RGBD Single Dataset Configuration
+# For indoor scenes without sky
+
+datasets:
+  - name: scenenet
+    data_path: datasets/pointcloud-raw/scenenet-rgbd/
+    max_depth: 10.0
+    weight: 1.0
+
+    # Sky handling (not needed for indoor scenes)
+    handle_sky: false
+    use_sky_dome: false
+    sky_loss_weight: 0.0
+
+    # Scale factor computation
+    compute_scale_factor_only_valid: true
+    compute_scale_factor_use_std: false
+
+# Shared training settings
+img_size: 256
+resize_height: 256

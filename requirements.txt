@@ -1,0 +1,17 @@
+accelerate>=1.0.0
+einops>=0.8.0
+imageio>=2.31.0
+matplotlib>=3.9.0
+numpy>=1.26.0
+opencv-python>=4.11.0.86
+Pillow>=10.0.0
+pyyaml>=6.0
+scipy>=1.11.0
+tensorboard>=2.15.0
+termcolor>=2.4.0
+torch>=2.7.0
+torchmetrics>=1.4.0
+torchvision>=0.22.0
+tqdm>=4.66.0
+trimesh>=4.0.0
+wandb>=0.17.0
