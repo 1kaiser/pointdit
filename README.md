@@ -130,7 +130,7 @@ Program](https://bughunters.google.com/open-source-security).
 
 This codebase is released under the Apache License 2.0 (see the `LICENSE` file at the root of
 the repository). It also contains code derived from other open-source projects, which
-remains under its original licenses; see [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES) for the
+remains under its original licenses; see [THIRD_PARTY_NOTICES](third_party/THIRD_PARTY_NOTICES) for the
 full list and notices.
 
 ## Citation

@@ -1,5 +1,20 @@
 #!/usr/bin/env bash
 
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
 # Zero-shot benchmark: PointDiT-L at 512x512, 3-step sampling, 7 datasets (3,444 samples).
 # Expected (7 datasets, x100): Rel_p 4.85  d1_p 97.54  Rel_d 3.09  d1_d 98.25  BF1 10.36
 # Drop --eval_no_save_gen to also write depth panels and point clouds

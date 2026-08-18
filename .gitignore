@@ -173,4 +173,4 @@ generation/
 results/
 logs/
 tmp/
-third_party/
+third_party/dinov3/
