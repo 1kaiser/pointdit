@@ -54,11 +54,7 @@ pip install -r requirements.txt
 git clone https://github.com/facebookresearch/dinov3.git third_party/dinov3
 ```
 
-All commands are run from the repository root, and the launch scripts in [scripts/](scripts). To check the installation:
-
-```bash
-bash run.sh   # CPU-only smoke test: no GPU, checkpoint or dataset needed
-```
+All commands are run from the repository root, and the launch scripts in [scripts/](scripts).
 
 The DINOv3 weights are gated and cannot be redistributed, so they are not part of the released
 checkpoints. Request access on the
