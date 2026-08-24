@@ -17,7 +17,7 @@
 
 datasets:
   - name: scenenet
-    data_path: datasets/pointcloud-raw/scenenet-rgbd/
+    data_path: datasets/train/scenenet-rgbd/
     max_depth: 10.0
     weight: 1.0
 
