@@ -434,27 +434,36 @@ tartanairv2/
 Reproducing the paper's Table 5. All are **real-captured** and disjoint from
 training. "Boundary" = scale-invariant boundary-F1 additionally reported.
 
-| Dataset | Domain | #Samples | Boundary |
-|---|---|---:|:---:|
-| DIODE | indoor + outdoor | 771 | |
-| KITTI | outdoor (driving) | 652 | |
-| NYUv2 | indoor | 654 | |
-| ETH3D | indoor + outdoor | 454 | |
-| HAMMER | indoor (multi-modal) | 775 | ✓ |
-| iBims-1 | indoor | 100 | ✓ |
-| Booster | indoor (transparent/specular) | 38 | ✓ |
-| **Total** | | **3,444** | |
+| Dataset | Domain | #Samples | Boundary | Download |
+|---|---|---:|:---:|---|
+| DIODE | indoor + outdoor | 771 | | [DIODE.zip](https://huggingface.co/datasets/Ruicheng/monocular-geometry-evaluation/resolve/main/DIODE.zip) |
+| KITTI | outdoor (driving) | 652 | | [KITTI.zip](https://huggingface.co/datasets/Ruicheng/monocular-geometry-evaluation/resolve/main/KITTI.zip) |
+| NYUv2 | indoor | 654 | | [NYUv2.zip](https://huggingface.co/datasets/Ruicheng/monocular-geometry-evaluation/resolve/main/NYUv2.zip) |
+| ETH3D | indoor + outdoor | 454 | | [ETH3D.zip](https://huggingface.co/datasets/Ruicheng/monocular-geometry-evaluation/resolve/main/ETH3D.zip) |
+| HAMMER | indoor (multi-modal) | 775 | ✓ | [HAMMER.zip](https://huggingface.co/datasets/Ruicheng/monocular-geometry-evaluation/resolve/main/HAMMER.zip) |
+| iBims-1 | indoor | 100 | ✓ | [iBims-1.zip](https://huggingface.co/datasets/Ruicheng/monocular-geometry-evaluation/resolve/main/iBims-1.zip) |
+| Booster | indoor (transparent/specular) | 38 | ✓ | [Booster.zip](https://huggingface.co/datasets/haofeixu/pointdit-eval/resolve/main/Booster.zip) |
+| **Total** | | **3,444** | | |
 
-**All 7 sets are available pre-processed**, one zip per dataset, 2.7 GB total:
+**All 7 sets are available pre-processed**, one zip per dataset, 2.9 GB total, split over
+two Hugging Face repositories:
 
-> **[PointDiT evaluation sets (Huggingface)](https://huggingface.co/datasets/haofeixu/pointdit-eval)**
+> Six of them from **[Ruicheng/monocular-geometry-evaluation](https://huggingface.co/datasets/Ruicheng/monocular-geometry-evaluation)**,
+> the evaluation sets released with MoGe, and Booster from
+> **[haofeixu/pointdit-eval](https://huggingface.co/datasets/haofeixu/pointdit-eval)**.
 
 Nothing needs converting. Download the zips into `datasets/eval/` and unpack:
 
 ```bash
+pip install -U "huggingface_hub[cli]"
 mkdir -p datasets/eval
-# download Booster.zip DIODE.zip ETH3D.zip HAMMER.zip iBims-1.zip KITTI.zip
-# NYUv2.zip into datasets/eval/ from the link above, then:
+
+hf download Ruicheng/monocular-geometry-evaluation --repo-type dataset \
+  --local-dir datasets/eval DIODE.zip KITTI.zip NYUv2.zip ETH3D.zip HAMMER.zip iBims-1.zip
+
+hf download haofeixu/pointdit-eval --repo-type dataset \
+  --local-dir datasets/eval Booster.zip
+
 cd datasets/eval && unzip '*.zip'   # one zip per dataset
 ```
 
