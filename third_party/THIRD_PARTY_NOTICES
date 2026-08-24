@@ -95,17 +95,7 @@ is vendored from Depth Pro.
 
 
 -----------------------------------------------------------------------
-5. MMDetection -- https://github.com/open-mmlab/mmdetection
-   Apache License 2.0, Copyright (c) OpenMMLab
------------------------------------------------------------------------
-
-publish_model.py is adapted from MMDetection's
-tools/model_converters/publish_model.py and retains its OpenMMLab header.
-Apache 2.0, the same licence as this repository.
-
-
------------------------------------------------------------------------
-6. SiT and Lightning-DiT
+5. SiT and Lightning-DiT
    https://github.com/willisma/SiT (MIT), https://github.com/hustvl/LightningDiT
 -----------------------------------------------------------------------
 
