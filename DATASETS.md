@@ -92,20 +92,20 @@ Reproducing the paper's Table 4. **Note: the paper's "TartanGround" is named
 `tartanairv2` in the code and configs.** Weights are the Stage-2 sampling
 probabilities (independent of corpus size).
 
-| # | Dataset (code name) | Domain | #Samples | Weight | `data_path` (config) |
-|---|---|---|---:|---:|---|
-| 1 | SceneNet-RGBD (`scenenet`) | indoor | 5,359,500 | 1.00¹ | `datasets/train/scenenet-rgbd` |
-| 2 | Hypersim (`hypersim`) | indoor | 70,647 | 0.12 | `datasets/train/hypersim` |
-| 3 | Virtual KITTI 2 (`vkitti2`) | driving | 42,520 | 0.14 | `datasets/train/vkitti2` |
-| 4 | UrbanSyn (`urbansyn`) | urban driving | 7,539 | 0.05 | `datasets/train/urbansyn` |
-| 5 | Synscapes (`synscapes`) | urban driving | 25,000 | 0.09 | `datasets/train/synscapes` |
-| 6 | TartanAir (`tartanair`) | diverse | 306,637 | 0.10 | `datasets/train/tartanair` |
-| 7 | OmniWorld-Game (`omniworldgame`) | diverse (game) | 1,024,252 | 0.19 | `datasets/train/omniworldgame` |
-| 8 | EDEN (`eden`) | garden/outdoor | 368,663 | 0.05 | `datasets/train/eden` |
-| 9 | IRS (`irs`) | indoor | 39,342 | 0.02 | `datasets/train/irs` |
-| 10 | Dynamic Replica (`dynamic_replica`) | indoor | 150,900 | 0.03 | `datasets/train/dynamic_replica` |
-| 11 | MVS-Synth (`mvssynth`) | urban | 12,000 | 0.06 | `datasets/train/mvssynth` |
-| 12 | TartanGround (`tartanairv2`) | diverse | 4,170,178 | 0.15 | `datasets/train/tartanairv2` |
+| # | Dataset (code name) | Domain | #Samples | Weight | `data_path` (config) | Source |
+|---|---|---|---:|---:|---|---|
+| 1 | SceneNet-RGBD (`scenenet`) | indoor | 5,359,500 | 1.00¹ | `datasets/train/scenenet-rgbd` | [link](https://robotvault.bitbucket.io/scenenet-rgbd.html) |
+| 2 | Hypersim (`hypersim`) | indoor | 70,647 | 0.12 | `datasets/train/hypersim` | [link](https://github.com/apple/ml-hypersim) |
+| 3 | Virtual KITTI 2 (`vkitti2`) | driving | 42,520 | 0.14 | `datasets/train/vkitti2` | [link](https://europe.naverlabs.com/research/proxy-virtual-worlds-vkitti-2/) |
+| 4 | UrbanSyn (`urbansyn`) | urban driving | 7,539 | 0.05 | `datasets/train/urbansyn` | [link](https://www.urbansyn.org) |
+| 5 | Synscapes (`synscapes`) | urban driving | 25,000 | 0.09 | `datasets/train/synscapes` | [link](https://synscapes.on.liu.se) |
+| 6 | TartanAir (`tartanair`) | diverse | 306,637 | 0.10 | `datasets/train/tartanair` | [link](https://theairlab.org/tartanair-dataset/) |
+| 7 | OmniWorld-Game (`omniworldgame`) | diverse (game) | 1,024,252 | 0.19 | `datasets/train/omniworldgame` | [link](https://huggingface.co/datasets/InternRobotics/OmniWorld) |
+| 8 | EDEN (`eden`) | garden/outdoor | 368,663 | 0.05 | `datasets/train/eden` | [link](https://lhoangan.github.io/eden/) |
+| 9 | IRS (`irs`) | indoor | 39,342 | 0.02 | `datasets/train/irs` | [link](https://github.com/HKBU-HPML/IRS) |
+| 10 | Dynamic Replica (`dynamic_replica`) | indoor | 150,900 | 0.03 | `datasets/train/dynamic_replica` | [link](https://dynamic-stereo.github.io) |
+| 11 | MVS-Synth (`mvssynth`) | urban | 12,000 | 0.06 | `datasets/train/mvssynth` | [link](https://phuang17.github.io/DeepMVS/mvs-synth.html) |
+| 12 | TartanGround (`tartanairv2`) | diverse | 4,170,178 | 0.15 | `datasets/train/tartanairv2` | [link](https://tartanair.org/tartanground/index.html) |
 
 ¹ SceneNet is Stage-1 only (single-dataset pre-training, weight 1.00). Datasets
 2 to 12 form the Stage-2 mixture (weights sum to 1.00).
@@ -116,6 +116,7 @@ All 12 sources are **synthetic** and provide dense depth with known intrinsics.
 
 ### 1. SceneNet-RGBD (Stage 1)
 
+- **Source:** [SceneNet RGB-D](https://robotvault.bitbucket.io/scenenet-rgbd.html)
 - **Root:** `datasets/train/scenenet-rgbd`
 - **Depth:** 16-bit PNG in **millimeters**, **ray-depth** (÷1000 → meters).
 - **Intrinsics:** hardcoded from fixed FOV (hfov=60°, vfov=45°); no calib file.
@@ -158,6 +159,7 @@ Two structural sub-families recur; scan them once, then the per-dataset trees:
 
 #### 2. Hypersim
 
+- **Source:** [apple/ml-hypersim](https://github.com/apple/ml-hypersim)
 - **Root:** `datasets/train/hypersim`
 - **Depth:** `.npy` float32 z-depth, **meters** (native ray-distance already
   converted during preprocessing).
@@ -185,6 +187,7 @@ hypersim/
 
 #### 3. Virtual KITTI 2 (`vkitti2`)
 
+- **Source:** [NAVER LABS Europe](https://europe.naverlabs.com/research/proxy-virtual-worlds-vkitti-2/)
 - **Root:** `datasets/train/vkitti2` (official tars already
   extracted and merged: rgb + depth + textgt).
 - **Depth:** 16-bit PNG in **centimeters**, z-depth (÷100 → meters), read with
@@ -215,6 +218,7 @@ vkitti2/
 
 #### 4. UrbanSyn
 
+- **Source:** [urbansyn.org](https://www.urbansyn.org)
 - **Root:** `datasets/train/urbansyn` (preprocessed to 512×1024).
 - **Depth:** `.npy` float32 z-depth, **meters** (already scaled).
 - **Intrinsics:** per-frame `.npz`, key `intrinsics`.
@@ -236,6 +240,7 @@ urbansyn/
 
 #### 5. Synscapes
 
+- **Source:** [synscapes.on.liu.se](https://synscapes.on.liu.se)
 - **Root:** `datasets/train/synscapes`
 - **Depth:** `.npy` float32 z-depth, **meters** (preprocessed from EXR).
 - **Intrinsics:** per-frame `.npz`, key `intrinsics`.
@@ -255,6 +260,7 @@ synscapes/
 
 #### 6. TartanAir
 
+- **Source:** [theairlab.org](https://theairlab.org/tartanair-dataset/)
 - **Root:** `datasets/train/tartanair` (already unzipped).
 - **Depth:** `.npy` float32 z-depth, **meters**.
 - **Intrinsics:** **hardcoded** `fx=fy=320, cx=320, cy=240` for 640×480.
@@ -278,6 +284,7 @@ tartanair/
 
 #### 7. OmniWorld-Game (`omniworldgame`)
 
+- **Source:** [InternRobotics/OmniWorld](https://huggingface.co/datasets/InternRobotics/OmniWorld)
 - **Root:** `datasets/train/omniworldgame`
 - **Depth:** 16-bit PNG, **nonlinear disparity-like** encoding decoded to metric
   z-depth (near=1.0, far=1000.0; see `load_omniworldgame_depth`). Not a plain
@@ -305,6 +312,7 @@ omniworldgame/
 
 #### 8. EDEN
 
+- **Source:** [lhoangan.github.io/eden](https://lhoangan.github.io/eden/)
 - **Root:** `datasets/train/eden`
 - **Depth:** `.npy` float32 z-depth, **meters**.
 - **Intrinsics:** per-frame `.npz`, key `intrinsics`.
@@ -325,6 +333,7 @@ eden/
 
 #### 9. IRS
 
+- **Source:** [HKBU-HPML/IRS](https://github.com/HKBU-HPML/IRS)
 - **Root:** `datasets/train/irs`
 - **Depth:** `.npy` float32 z-depth, **meters** (preprocessed from disparity EXR;
   depth-edge pixels pre-filtered, hence `filterdepthedge`).
@@ -346,6 +355,7 @@ irs/
 
 #### 10. Dynamic Replica (`dynamic_replica`)
 
+- **Source:** [dynamic-stereo.github.io](https://dynamic-stereo.github.io)
 - **Root:** `datasets/train/dynamic_replica` (CUT3R-style processed data).
 - **Depth:** `.npy` float32 z-depth, **meters**.
 - **Intrinsics:** per-frame `.npz`, key `intrinsics` (≈`fx=fy=700, cx=640,
@@ -369,6 +379,7 @@ dynamic_replica/
 
 #### 11. MVS-Synth (`mvssynth`)
 
+- **Source:** [DeepMVS / MVS-Synth](https://phuang17.github.io/DeepMVS/mvs-synth.html)
 - **Root:** `datasets/train/mvssynth` (the former `GTAV_720`
   contents sit directly under this root)
 - **Depth:** `.npy` float32 z-depth in **centimeters** (÷100 → meters).
@@ -391,6 +402,7 @@ mvssynth/
 
 #### 12. TartanGround / TartanAirV2 (`tartanairv2`)
 
+- **Source:** [tartanair.org/tartanground](https://tartanair.org/tartanground/index.html)
 - **Root:** `datasets/train/tartanairv2` (already unzipped).
 - **Depth:** **4-channel RGBA 8-bit PNG whose 4 bytes per pixel are a packed
   little-endian float32** (meters), z-depth. Decode with
@@ -435,7 +447,7 @@ training. "Boundary" = scale-invariant boundary-F1 additionally reported.
 
 **All 7 sets are available pre-processed**, one zip per dataset, 2.7 GB total:
 
-> **[PointDiT evaluation sets (Google Drive)](https://drive.google.com/drive/folders/1RklLC1VFCBtFra_y29mp_m3eVvy7C9bg?usp=sharing)**
+> **[PointDiT evaluation sets (Huggingface)](https://huggingface.co/datasets/haofeixu/pointdit-eval)**
 
 Nothing needs converting. Download the zips into `datasets/eval/` and unpack:
 
