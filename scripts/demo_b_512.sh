@@ -16,7 +16,7 @@
 
 
 # PointDiT-B (512x512) on your own images. Set IMAGE_DIR below; .jpg/.png, nested dirs are fine.
-# Results go to generation/pretrained-pointditb-512/<IMAGE_DIR folder name>/, so
+# Results go to generation/pretrained-pointditb-512-mixdata-nodinov3-1d42aacf/<IMAGE_DIR folder name>/, so
 # IMAGE_DIR=assets/demo writes to .../demo/. Each output is named after its input:
 # sample0.png -> sample0_depth.png and sample0_pointcloud.ply.
 
@@ -29,7 +29,10 @@
 cd "$(dirname "$0")/.."
 
 IMAGE_DIR=assets/demo
-CHECKPOINT=pretrained/pointditb-512.pth
+# The frozen DINOv3 encoder is not part of the checkpoint: its weights are gated, so
+# they are downloaded separately into pretrained/dinov3/ (see MODELS.md).
+CHECKPOINT=pretrained/pointditb-512-mixdata-nodinov3-1d42aacf.pth
+export DINOV3_WEIGHTS_DIR=${DINOV3_WEIGHTS_DIR:-pretrained/dinov3}
 
 python main.py \
 --model PointDiT-B/16 --feature_embedding_type dinov3_vitb16 --proj_dropout 0.0 \

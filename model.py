@@ -320,10 +320,6 @@ class PointDiT(nn.Module):
                 self.y_embedder = torch.hub.load(
                     dinov3_repo, f'dinov3_{vit_type}', source='local', weights=local_weights_path)
             else:
-                # Every PointDiT checkpoint already stores the DINOv3 encoder weights under
-                # net.y_embedder.*, so evaluation/inference only needs the architecture here.
-                # The gated LVD-1689M weights are required only to train from scratch, and
-                # main.py warns about that case (it can see whether a checkpoint is coming).
                 self.y_embedder = torch.hub.load(
                     dinov3_repo, f'dinov3_{vit_type}', source='local', pretrained=False)
             # freeze DINOv3 parameters
@@ -687,9 +683,3 @@ PointDiT_models = {
     'PointDiT-H/16': PointDiT_H_16,
 }
 
-# Legacy aliases. This repository began as a fork of JiT (see THIRD_PARTY_NOTICES),
-# whose architecture names it used until the public release. Accepted so older
-# --model strings keep working; prefer the PointDiT-* names above.
-PointDiT_models['JiT-B/16'] = PointDiT_B_16
-PointDiT_models['JiT-L/16'] = PointDiT_L_16
-PointDiT_models['JiT-H/16'] = PointDiT_H_16

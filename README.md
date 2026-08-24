@@ -60,21 +60,27 @@ All commands are run from the repository root, and the launch scripts in [script
 bash run.sh   # CPU-only smoke test: no GPU, checkpoint or dataset needed
 ```
 
-The DINOv3 weights are gated and needed only for training; the released checkpoints already
-carry the encoder. To train, request access on the
+The DINOv3 weights are gated and cannot be redistributed, so they are not part of the released
+checkpoints. Request access on the
 [official DINOv3 repository](https://github.com/facebookresearch/dinov3) and place the weights
-under `pretrained/dinov3/` with their exact upstream filenames.
+under `pretrained/dinov3/` with their exact upstream filenames, or point `DINOV3_WEIGHTS_DIR` at
+the directory holding them. They are needed for evaluation and the demo as well as for training;
+see [MODELS.md](MODELS.md) for the file list.
 
 ## Model Zoo
 
 Pre-trained models are available in the [Model Zoo](MODELS.md), at `256×256` and `512×512` for
-each of PointDiT-B / L / H.
+each of PointDiT-B / L / H. All weights are hosted on
+[Hugging Face](https://huggingface.co/haofeixu/pointdit).
 
 Download the weights and place (or symlink) them in the `pretrained` directory:
 
 ```bash
 ln -s YOUR_MODEL_PATH pretrained
 ```
+
+The checkpoints ship without the frozen DINOv3 encoder, which is downloaded separately (see
+[Installation](#installation)).
 
 ## Demo
 

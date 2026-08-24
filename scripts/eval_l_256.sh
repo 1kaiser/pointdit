@@ -22,7 +22,10 @@
 
 cd "$(dirname "$0")/.."
 
-CHECKPOINT=pretrained/pointditl-256-scenenet.pth
+# The frozen DINOv3 encoder is not part of the checkpoint: its weights are gated, so
+# they are downloaded separately into pretrained/dinov3/ (see MODELS.md).
+CHECKPOINT=pretrained/pointditl-256-scenenet-nodinov3-00141e97.pth
+export DINOV3_WEIGHTS_DIR=${DINOV3_WEIGHTS_DIR:-pretrained/dinov3}
 EVAL_DATA=datasets/eval
 
 python main.py \

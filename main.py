@@ -685,6 +685,7 @@ def main(args):
     accelerator.wait_for_everyone()
 
     # resume pretrained feature embedding
+    dinov3_weights_loaded = False
     if args.feature_embedding_type.startswith('dinov3'):
         vit_type = args.feature_embedding_type.split('_')[-1]
         assert vit_type in ['vits16', 'vits16plus', 'vitb16', 'vitl16', 'vith16plus', 'vit7b16'], f'ViT type {vit_type} not supported for DINOv3 feature embedding'
@@ -707,12 +708,9 @@ def main(args):
         if os.path.exists(ckpt_path):
             ckpts = torch.load(ckpt_path, map_location='cpu')
             model_without_ddp.net.y_embedder.load_state_dict(ckpts, strict=True)
+            dinov3_weights_loaded = True
             print(f'Loaded pretrained DINOv3 {vit_type} from {ckpt_path}')
         elif args.pretrained is None:
-            # With --pretrained the encoder arrives with the checkpoint (net.y_embedder.*),
-            # loaded further below, so a missing gated file is normal and not worth a line of
-            # output. Without one there is nothing else to initialise the encoder from, so the
-            # run really would condition on a random encoder: say so.
             print(f'[DINOv3] {ckpt_path} not found -> encoder left randomly initialised. '
                   f'Download the gated LVD-1689M weights to train from scratch.')
 
@@ -773,16 +771,26 @@ def main(args):
         assert os.path.exists(args.pretrained)
         checkpoint = torch.load(args.pretrained, map_location='cpu', weights_only=False)
 
-        # Slim checkpoints produced by tools/extract_ema.py carry a single weight set under
-        # 'model' and no EMA copies. Skip all EMA handling for them so only one copy of the
-        # parameters reaches the GPU (a full PointDiT-H checkpoint otherwise needs ~3x).
-        has_ema = 'model_ema1' in checkpoint and 'model_ema2' in checkpoint
+        # The released checkpoints ship without the frozen DINOv3 encoder: those weights are
+        # gated and cannot be redistributed
+        dinov3_stripped = checkpoint.get('dinov3_stripped')
+        if dinov3_stripped is not None and not dinov3_weights_loaded:
+            raise FileNotFoundError(
+                f'"{args.pretrained}" was released without the frozen DINOv3 '
+                f'{dinov3_stripped.get("variant", vit_type)} encoder, and the encoder weights '
+                f'were not found at "{ckpt_path}".\n'
+                f'Request access at https://github.com/facebookresearch/dinov3, then place '
+                f'{dinov3_stripped.get("upstream_filename", "the weights")} in '
+                f'pretrained/dinov3/, or set DINOV3_WEIGHTS_DIR to the directory holding it.')
+
+        # A checkpoint carries up to two EMA copies. The released ones keep only 'model_ema1'
+        ema_keys = [k for k in ('model_ema1', 'model_ema2') if k in checkpoint]
+        has_ema = 'model_ema1' in checkpoint
 
         if args.resize_posemb:
             # Update the checkpoint dict (key matches your error: 'net.pos_embed')
             patch_size = int(args.model.split('/')[-1])
             new_num_patches = (args.img_size // patch_size) ** 2
-            ema_keys = ['model_ema1', 'model_ema2'] if has_ema else []
             for key in ['model'] + ema_keys:
                 checkpoint[key] = resize_vit_pos_embed(checkpoint[key], new_num_patches=new_num_patches, key='net.pos_embed')
 
@@ -794,12 +802,23 @@ def main(args):
 
         if args.resize_patch_embed > 0:
             new_patch_size = int(args.model.split('/')[-1])
-            ema_keys = ['model_ema1', 'model_ema2'] if has_ema else []
             for key in ['model'] + ema_keys:
                 checkpoint[key] = resize_patch_embed_and_final_layer(
                     checkpoint[key], args.resize_patch_embed, new_patch_size, out_channels=3)
 
-        model_without_ddp.load_state_dict(checkpoint['model'], strict=not args.no_strict_load)
+        if dinov3_stripped is not None and not args.no_strict_load:
+            # Tolerate exactly the encoder keys the release removed -- already loaded above --
+            # and keep every other mismatch fatal, which a blanket --no_strict_load would not.
+            prefix = dinov3_stripped.get('prefix', 'net.y_embedder.')
+            incompatible = model_without_ddp.load_state_dict(checkpoint['model'], strict=False)
+            missing = [k for k in incompatible.missing_keys if not k.startswith(prefix)]
+            if missing or incompatible.unexpected_keys:
+                raise RuntimeError(
+                    'Error(s) in loading state_dict for {}:\n\tMissing keys: {}\n\t'
+                    'Unexpected keys: {}'.format(type(model_without_ddp).__name__,
+                                                 missing, incompatible.unexpected_keys))
+        else:
+            model_without_ddp.load_state_dict(checkpoint['model'], strict=not args.no_strict_load)
 
         if args.evaluate_gen and 'epoch' in checkpoint:
             args.start_epoch = checkpoint['epoch']
@@ -817,7 +836,9 @@ def main(args):
 
             print('resume pretrained ema')
             ema_state_dict1 = checkpoint['model_ema1']
-            ema_state_dict2 = checkpoint['model_ema2']
+            # Only ema_params1 is read at evaluation time, so the released checkpoints drop the
+            # second copy; the partial resume below then falls back to the loaded weights for it.
+            ema_state_dict2 = checkpoint.get('model_ema2', {})
 
             # partial resume
             model_without_ddp.ema_params1 = []
