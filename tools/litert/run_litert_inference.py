@@ -274,3 +274,43 @@ ax.set_title(f"input | PyTorch-GPU reference | LiteRT ({Path(tflite_path).name})
 ax.axis("off")
 plt.tight_layout()
 plt.show()
+
+# %% [markdown]
+# ## 9. Export to GLB + an interactive `<model-viewer>` HTML page
+#
+# `save_single_point_cloud` already writes via `trimesh.PointCloud(...).export(filename)`, which
+# dispatches the actual file format from the extension -- so it already writes a real `.glb` with
+# zero new export logic, just a different extension (see `tools/litert/run_multiview_merge.py`
+# section 11 for the same finding verified in more detail, and `research-repo-bringup` skill for
+# where this was originally established).
+
+# %%
+save_single_point_cloud(litert_pointcloud[0].transpose(1, 2, 0), arr,
+                         filename=f"{out_dir}/{stem}_litert_pointcloud.glb")
+
+html = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>PointDiT-{model_size}/16 LiteRT output</title>
+<style>
+  html, body {{ margin: 0; height: 100%; background: #ffffff; }}
+  model-viewer {{ width: 100%; height: 100%; --poster-color: #ffffff; }}
+</style>
+<script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
+</head>
+<body>
+<model-viewer src="{stem}_litert_pointcloud.glb" alt="PointDiT-{model_size}/16 LiteRT output"
+              camera-controls auto-rotate exposure="1.0"
+              environment-image="neutral" shadow-intensity="0">
+</model-viewer>
+</body>
+</html>
+"""
+html_path = f"{out_dir}/{stem}_litert_pointcloud.html"
+Path(html_path).write_text(html)
+print(f"Wrote {out_dir}/{stem}_litert_pointcloud.glb and {html_path}.")
+print(f"Serve it, don't double-click it: a bare file:// open blocks model-viewer's fetch() of "
+      f"the sibling .glb with a CORS error (confirmed live -- see run_multiview_merge.py section "
+      f"11 and the research-repo-bringup skill). Run e.g. "
+      f"`python -m http.server -d {out_dir} 8000` and open http://127.0.0.1:8000/{stem}_litert_pointcloud.html")

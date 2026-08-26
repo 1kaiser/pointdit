@@ -180,6 +180,7 @@ third_party/LoMa/
 # distributed via GitHub Releases, never committed (see tools/litert/README.md).
 tools/litert/models/
 tools/litert/web_demo/node_modules/
+tools/litert/glb_viewer/node_modules
 tools/litert/web_demo/model.tflite
 tools/litert/web_demo/model_b16.tflite
 # The pinecone benchmark set is fetched from the 1kaiser/NERF_360 HF dataset, not vendored.

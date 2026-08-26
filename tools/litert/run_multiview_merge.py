@@ -421,3 +421,122 @@ plt.show()
 # hops with an implausible rotation given the known capture pattern) or genuine global refinement
 # across all pairs jointly rather than a sequential chain -- see `research-repo-bringup` skill for
 # where this is tracked as a real, open limitation rather than an assumed non-issue.
+
+# %% [markdown]
+# ## 11. Export to GLB + generate an interactive `<model-viewer>` HTML page
+#
+# The static ortho plots above are useful for a quick before/after check, but a real interactive
+# 3D view (orbit/zoom) makes the merge quality far easier to judge by eye. This project already
+# has everything needed: `util/viz_pointcloud.py`'s `save_single_point_cloud` writes via
+# `trimesh.PointCloud(...).export(filename)`, and trimesh dispatches the actual file format from
+# the extension alone -- so **the exact same function that wrote the `.ply` files above already
+# writes a real, valid `.glb`** with zero new export logic, just a different `filename` extension
+# (verified directly: `trimesh.load(path, force="scene")` round-trips both formats to the same
+# `PointCloud` geometry). No custom GLB writer needed.
+
+# %%
+save_single_point_cloud(naive_points.reshape(-1, 1, 3), naive_colors.reshape(-1, 1, 3),
+                         filename=f"{out_dir}/naive_merged.glb")
+save_single_point_cloud(aligned_points.reshape(-1, 1, 3), aligned_colors.reshape(-1, 1, 3),
+                         filename=f"{out_dir}/aligned_merged.glb")
+print(f"Wrote {out_dir}/naive_merged.glb and {out_dir}/aligned_merged.glb")
+
+# %% [markdown]
+# ### The HTML generator
+#
+# `<model-viewer>` (Google's web component) handles GLB loading, camera auto-framing, and
+# orbit/zoom controls entirely on its own -- no manual bounding-sphere math, no Three.js
+# boilerplate (the same real tradeoff found useful in a prior project's own GLB-viewer
+# exploration, `site_work/test2026/glb_interaction_tryout` -- see `research-repo-bringup` skill
+# for what carried over from it). Loaded here via CDN (`unpkg.com/@google/model-viewer`) since
+# this HTML is meant to be opened directly in a normal, internet-connected browser -- not driven
+# headlessly with no network access, which is the case that project vendored the JS file locally
+# for.
+
+# %%
+def write_modelviewer_html(glb_filename, html_path, title):
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>{title}</title>
+<style>
+  html, body {{ margin: 0; height: 100%; background: #ffffff; }}
+  model-viewer {{ width: 100%; height: 100%; --poster-color: #ffffff; }}
+</style>
+<script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
+</head>
+<body>
+<model-viewer src="{glb_filename}" alt="{title}"
+              camera-controls auto-rotate exposure="1.0"
+              environment-image="neutral" shadow-intensity="0">
+</model-viewer>
+</body>
+</html>
+"""
+    Path(html_path).write_text(html)
+
+
+write_modelviewer_html("naive_merged.glb", f"{out_dir}/naive_merged.html", "PointDiT naive merge")
+write_modelviewer_html("aligned_merged.glb", f"{out_dir}/aligned_merged.html", "PointDiT aligned merge (LoMa + Umeyama)")
+print(f"Wrote {out_dir}/naive_merged.html and {out_dir}/aligned_merged.html "
+      f"-- open either directly in a browser to orbit/zoom the real merged point cloud.")
+
+# %% [markdown]
+# ### Verify it actually renders -- don't just trust that the HTML was written
+#
+# Same discipline as every other step in this notebook: a `load` event firing and a webpage
+# existing doesn't prove there's real visible geometry (a prior project's own GLB-viewer work
+# found real cases where a renderer reports success with a completely blank canvas -- see
+# `research-repo-bringup` skill). `verify_modelviewer.js` drives real headless Chrome (this
+# repo's own already-proven Playwright launch flags from `web_demo/run_demo.js`), screenshots the
+# page, and this cell checks the actual pixel content, not just that the subprocess exited 0.
+#
+# **Real bug caught by actually running this, not by reading the code**: opening the HTML as a
+# bare `file://` URL fails silently from model-viewer's own perspective -- the page loads, the CDN
+# script loads, but the browser's `fetch()` refuses to load the sibling `.glb` file
+# ("Access to fetch ... has been blocked by CORS policy ... file: is null origin"), because a
+# `file://` page's origin is `null` and Chrome's CORS policy blocks fetching *any* other local
+# file from it, even one in the same directory. This is exactly why `web_demo/run_demo.js`
+# already serves its page via `python -m http.server` rather than opening it directly -- the fix
+# here is the same, just started from inside the notebook itself (a background
+# `http.server` thread) instead of a separate manual shell step.
+
+# %%
+import functools
+import http.server
+import subprocess
+import threading
+
+from IPython.display import Image as IPyImage, display
+
+NODE_BIN = "/home/kaiser/.conda/envs/node20/bin/node"
+
+handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=out_dir)
+httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+server_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+server_thread.start()
+port = httpd.server_address[1]
+print(f"serving {out_dir} at http://127.0.0.1:{port}/")
+
+screenshot_path = f"{out_dir}/aligned_merged_screenshot.png"
+result = subprocess.run(
+    [NODE_BIN, "tools/litert/glb_viewer/verify_modelviewer.js",
+     f"http://127.0.0.1:{port}/aligned_merged.html", screenshot_path],
+    capture_output=True, text=True,
+)
+print(result.stdout)
+if result.returncode != 0:
+    print(result.stderr)
+
+httpd.shutdown()
+server_thread.join(timeout=5)
+
+assert result.returncode == 0
+
+screenshot = np.asarray(Image.open(screenshot_path).convert("RGB"))
+pixel_std = screenshot.astype(float).std()
+print(f"screenshot pixel stddev: {pixel_std:.2f}")
+assert pixel_std > 3.0, "screenshot looks blank -- model-viewer likely failed to render real geometry"
+
+display(IPyImage(filename=screenshot_path))
