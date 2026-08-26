@@ -246,7 +246,9 @@ print(f"LiteRT vs PyTorch, full {args.num_sampling_steps}-step generation: "
 
 # %%
 img_viz = (arr * 255.0).astype(np.uint8)
-stem = Path(image_path).stem
+# Include model_size and the .tflite variant name -- otherwise two runs on the same image
+# (e.g. L then B, or fp32 then weight-only) silently overwrite each other's output files.
+stem = f"{Path(image_path).stem}_{model_size}16_{Path(tflite_path).stem}"
 
 panels = [img_viz]
 for tag, pc in [("pytorch", pytorch_pointcloud), ("litert", litert_pointcloud)]:
