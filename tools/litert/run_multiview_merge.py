@@ -601,3 +601,162 @@ standalone_std = np.asarray(Image.open(standalone_screenshot).convert("RGB")).as
 print(f"standalone file:// screenshot pixel stddev: {standalone_std:.2f}")
 assert standalone_std > 3.0
 display(IPyImage(filename=standalone_screenshot))
+
+# %% [markdown]
+# ## 12. Mesh every image's point map, combine into a single merged mesh, then `gltfjsx --transform`
+#
+# Sections 8-11 merged raw *points* (each image's own zero-centered point map, aligned into a
+# shared frame). This section does the same alignment, but on real triangulated geometry instead
+# of bare points, and combines every image's mesh into **one single mesh asset** (not N separate
+# meshes in one scene) -- concatenated vertex/face buffers with each image's own face indices
+# offset by the running vertex count, exactly the way `trimesh.util.concatenate` (or a hand-rolled
+# equivalent) merges disjoint meshes into one.
+#
+# Each image's own point map is still a *regular per-pixel grid* (see
+# `run_litert_inference.py` section 10 for the full grid-triangulation + `depth_flying_points`
+# writeup) -- meshed independently per image, in each image's own raw (pre-GL-flip) frame, *then*
+# the same `apply_sim3` alignment transform from section 7 is applied to those mesh vertices
+# (not to a resampled/refit point set) -- consistent with section 8's point path, which also
+# aligns in the raw frame and only applies the GL flip once, at the very end.
+
+# %%
+import trimesh
+
+from util.viz_pointcloud import depth_flying_points
+
+
+def image_mesh_faces(H, W, flying):
+    """Grid-triangulation face indices for one (H, W) image, dropping any quad touching a
+    depth-discontinuity ("flying point") pixel -- identical logic to
+    run_litert_inference.py's pointmap_to_mesh, kept separate here since faces are built before
+    the vertices are known (vertices come from N different images with different transforms)."""
+    ii, jj = np.meshgrid(np.arange(H - 1), np.arange(W - 1), indexing="ij")
+    idx = lambda r, c: r * W + c
+    v00, v01, v10, v11 = idx(ii, jj), idx(ii, jj + 1), idx(ii + 1, jj), idx(ii + 1, jj + 1)
+    bad = flying[ii, jj] | flying[ii, jj + 1] | flying[ii + 1, jj] | flying[ii + 1, jj + 1]
+    v00, v01, v10, v11 = v00[~bad], v01[~bad], v10[~bad], v11[~bad]
+    return np.concatenate([
+        np.stack([v00, v10, v01], axis=1),
+        np.stack([v01, v10, v11], axis=1),
+    ], axis=0)
+
+
+all_verts, all_colors, all_faces = [], [], []
+vertex_offset = 0
+for img, (s, R, t) in zip(images, global_transforms):
+    pm = img["pointmap"]  # (3, H, W), raw (pre-GL-flip), same array section 8 uses
+    H, W = pm.shape[1:]
+    flying = depth_flying_points(pm[2])
+    faces = image_mesh_faces(H, W, flying)
+
+    pts_flat = pm.reshape(3, -1).T
+    aligned = apply_sim3(s, R, t, pts_flat)  # same transform, same order as the point path
+    all_verts.append(aligned)
+    all_colors.append(img["rgb"].reshape(-1, 3).astype(np.float32) / 255.0)
+    all_faces.append(faces + vertex_offset)
+    vertex_offset += H * W
+
+merged_verts = np.concatenate(all_verts)
+merged_colors = np.concatenate(all_colors)
+merged_faces = np.concatenate(all_faces)
+
+# Single GL flip at the very end, on the fully assembled mesh -- matches save_single_point_cloud's
+# own transform_to_gl convention (see run_litert_inference.py section 10), applied once here
+# rather than per-image (per-image flipping would need to happen *before* alignment, but the
+# alignment transform itself was fit in the raw, un-flipped frame -- see section 7).
+merged_verts_gl = merged_verts.copy()
+merged_verts_gl[:, 1] *= -1
+merged_verts_gl[:, 2] *= -1
+
+merged_mesh = trimesh.Trimesh(
+    vertices=merged_verts_gl, faces=merged_faces,
+    vertex_colors=(merged_colors * 255).astype(np.uint8), process=False,
+)
+mesh_glb_path = f"{out_dir}/aligned_merged_mesh.glb"
+merged_mesh.export(mesh_glb_path)
+print(f"single merged mesh: {len(merged_mesh.vertices):,} verts, {len(merged_mesh.faces):,} faces "
+      f"(from {len(images)} images)")
+print(f"{mesh_glb_path}: {Path(mesh_glb_path).stat().st_size/1e6:.1f} MB "
+      f"(vs. {Path(f'{out_dir}/aligned_merged.glb').stat().st_size/1e6:.1f} MB for the bare-point merge)")
+
+# %% [markdown]
+# ### Verify the merged mesh actually renders, then try the `1kaiser/Q` size-reducer on it
+#
+# Same real headless-Chrome + pixel-stddev check as every GLB in this notebook -- and then the
+# same `gltfjsx --transform` command `run_litert_inference.py` section 10 found breaks rendering
+# for a single-image mesh (Draco output the plain CDN `<model-viewer>` build can't decode).
+# Re-tested here rather than assumed, since a multi-image merged mesh (disjoint per-image patches,
+# not one connected surface) is a different enough case that it's worth confirming independently,
+# not just inferring from the earlier single-image result.
+
+# %%
+mesh_view_html = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
+<style>html,body{{margin:0;height:100%;background:#fff;}}model-viewer{{width:100%;height:100%;}}</style>
+</head><body><model-viewer src="aligned_merged_mesh.glb" camera-controls auto-rotate
+exposure="1.0" environment-image="neutral" shadow-intensity="0"></model-viewer></body></html>
+"""
+mesh_view_path = f"{out_dir}/aligned_merged_mesh_view.html"
+Path(mesh_view_path).write_text(mesh_view_html)
+
+handler3 = functools.partial(http.server.SimpleHTTPRequestHandler, directory=out_dir)
+httpd3 = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler3)
+threading.Thread(target=httpd3.serve_forever, daemon=True).start()
+port3 = httpd3.server_address[1]
+
+mesh_screenshot_path = f"{out_dir}/aligned_merged_mesh_screenshot.png"
+result = subprocess.run(
+    [NODE_BIN, "tools/litert/glb_viewer/verify_modelviewer.js",
+     f"http://127.0.0.1:{port3}/aligned_merged_mesh_view.html", mesh_screenshot_path],
+    capture_output=True, text=True,
+)
+httpd3.shutdown()
+if result.returncode != 0:
+    print(result.stderr[-1500:])
+assert result.returncode == 0
+mesh_pixel_std = np.asarray(Image.open(mesh_screenshot_path).convert("RGB")).astype(float).std()
+print(f"merged mesh screenshot pixel stddev: {mesh_pixel_std:.2f}")
+assert mesh_pixel_std > 3.0, "merged mesh render looks blank"
+display(IPyImage(filename=mesh_screenshot_path))
+
+# %%
+# Same bare invocation the earlier, already-verified single-image test used (no --output flag)
+# -- gltfjsx then names the transformed GLB "<input-stem>-transformed.glb" alongside the input by
+# default, which is what the path below assumes.
+gltfjsx_bin = str(Path("tools/litert/glb_viewer/node_modules/.bin/gltfjsx").resolve())
+transform_result = subprocess.run(
+    [NODE_BIN, gltfjsx_bin, str(Path(mesh_glb_path).resolve()), "--transform"],
+    capture_output=True, text=True, cwd=out_dir,
+)
+print(transform_result.stdout[-1000:])
+if transform_result.returncode != 0:
+    print(transform_result.stderr[-1500:])
+
+transformed_path = f"{out_dir}/aligned_merged_mesh-transformed.glb"
+if Path(transformed_path).exists():
+    print(f"{transformed_path}: {Path(transformed_path).stat().st_size/1e6:.1f} MB "
+          f"(from {Path(mesh_glb_path).stat().st_size/1e6:.1f} MB)")
+
+    transformed_view_html = mesh_view_html.replace("aligned_merged_mesh.glb", "aligned_merged_mesh-transformed.glb")
+    transformed_view_path = f"{out_dir}/aligned_merged_mesh_transformed_view.html"
+    Path(transformed_view_path).write_text(transformed_view_html)
+
+    handler4 = functools.partial(http.server.SimpleHTTPRequestHandler, directory=out_dir)
+    httpd4 = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler4)
+    threading.Thread(target=httpd4.serve_forever, daemon=True).start()
+    port4 = httpd4.server_address[1]
+
+    transformed_screenshot_path = f"{out_dir}/aligned_merged_mesh_transformed_screenshot.png"
+    result_t = subprocess.run(
+        [NODE_BIN, "tools/litert/glb_viewer/verify_modelviewer.js",
+         f"http://127.0.0.1:{port4}/{Path(transformed_view_path).name}", transformed_screenshot_path],
+        capture_output=True, text=True,
+    )
+    httpd4.shutdown()
+    transformed_std = np.asarray(Image.open(transformed_screenshot_path).convert("RGB")).astype(float).std()
+    print(f"transformed (Draco) mesh screenshot pixel stddev: {transformed_std:.2f} "
+          f"({'renders correctly' if transformed_std > 3.0 else 'BLANK -- same gap as run_litert_inference.py section 10'})")
+    display(IPyImage(filename=transformed_screenshot_path))
+else:
+    print("gltfjsx did not produce a transformed output")
