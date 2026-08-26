@@ -341,31 +341,51 @@ print(f"Wrote {out_dir}/naive_merged.ply and {out_dir}/aligned_merged.ply "
       f"({len(images)} images, {aligned_points.shape[0]} points each)")
 
 # %% [markdown]
-# ## 9. Verify visually -- top-down projections of both merged clouds, side by side
+# ## 9. Verify visually -- top/front/side orthographic projections, both merged clouds
 #
 # A coherent multi-view reconstruction should show the *same* scene structure repeated/aligned
-# across viewpoints; an unaligned one shows N independent, mutually-offset copies scattered
-# around the origin. Colored by depth (Z) for the naive cloud (its own scale is meaningless
-# across images) and left as real RGB for the aligned cloud.
+# across viewpoints in all three views; an unaligned one shows N independent, mutually-offset
+# copies. Point-map channels follow this repo's own convention (`sampled_pointcloud[b_id, 2]` is
+# "depth" in `engine.py`/`denoiser.py` -- computer-vision camera axes: channel 0 = X (right),
+# channel 1 = Y (down), channel 2 = Z (forward/depth), matching `save_single_point_cloud`'s own
+# `transform_to_gl` flip being needed to reach OpenGL axes from this raw convention). The three
+# canonical orthographic views project out one axis each:
+#
+# | view | looking along | horizontal axis | vertical axis |
+# |---|---|---|---|
+# | top | -Y (bird's-eye) | X | Z (depth) |
+# | front | -Z (camera's own view direction) | X | Y (inverted so "up" is up) |
+# | side | -X | Z (depth) | Y (inverted) |
+#
+# (An earlier version of this cell plotted only the front view (X vs Y) but labeled it
+# "top-down" -- a real mislabeling, corrected here now that all three views are shown explicitly
+# and named by their actual axes rather than by assumption.)
 
 # %%
 import matplotlib.pyplot as plt
 
-fig, axes = plt.subplots(1, 2, figsize=(14, 7))
+VIEWS = [
+    ("top (X vs Z)", 0, 2, False),
+    ("front (X vs Y)", 0, 1, True),
+    ("side (Z vs Y)", 2, 1, True),
+]
 sub = np.random.RandomState(0).choice(len(naive_points), size=min(200_000, len(naive_points)), replace=False)
 
-axes[0].scatter(naive_points[sub, 0], naive_points[sub, 1], s=0.2, c=naive_colors[sub])
-axes[0].set_title(f"Naive merge (no matching/alignment) -- {len(images)} images")
-axes[0].set_aspect("equal")
-axes[0].invert_yaxis()
-
-axes[1].scatter(aligned_points[sub, 0], aligned_points[sub, 1], s=0.2, c=aligned_colors[sub])
-axes[1].set_title("LoMa-matched + Umeyama-aligned merge")
-axes[1].set_aspect("equal")
-axes[1].invert_yaxis()
+fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+for row, (points, colors, row_title) in enumerate([
+    (naive_points, naive_colors, f"Naive merge (no matching/alignment) -- {len(images)} images"),
+    (aligned_points, aligned_colors, "LoMa-matched + Umeyama-aligned merge"),
+]):
+    for col, (view_name, xi, yi, flip) in enumerate(VIEWS):
+        ax = axes[row][col]
+        ax.scatter(points[sub, xi], points[sub, yi], s=0.2, c=colors[sub])
+        ax.set_title(f"{row_title}\n{view_name}", fontsize=10)
+        ax.set_aspect("equal")
+        if flip:
+            ax.invert_yaxis()
 
 plt.tight_layout()
-plt.savefig(f"{out_dir}/merge_comparison_topdown.png", dpi=150)
+plt.savefig(f"{out_dir}/merge_comparison_ortho.png", dpi=150)
 plt.show()
 
 # %% [markdown]
