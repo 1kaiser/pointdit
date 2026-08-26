@@ -314,3 +314,40 @@ print(f"Serve it, don't double-click it: a bare file:// open blocks model-viewer
       f"the sibling .glb with a CORS error (confirmed live -- see run_multiview_merge.py section "
       f"11 and the research-repo-bringup skill). Run e.g. "
       f"`python -m http.server -d {out_dir} 8000` and open http://127.0.0.1:8000/{stem}_litert_pointcloud.html")
+
+# %% [markdown]
+# ### A single, self-contained file -- for downloading straight to a phone
+#
+# The version above needs the `.glb` served alongside it. Embedding the GLB as a base64 `data:`
+# URI instead makes one self-contained file that opens correctly straight from a `file://` open
+# (a downloaded email/cloud-storage attachment, tapped open on a phone) -- no server, no sibling
+# file. See `run_multiview_merge.py` section 11 for the full writeup (why this is needed, and its
+# real size cost: base64 inflates the GLB by ~33% as embedded text).
+
+# %%
+import base64
+
+glb_b64 = base64.b64encode(Path(f"{out_dir}/{stem}_litert_pointcloud.glb").read_bytes()).decode("ascii")
+standalone_html = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>PointDiT-{model_size}/16 LiteRT output</title>
+<style>
+  html, body {{ margin: 0; height: 100%; background: #ffffff; }}
+  model-viewer {{ width: 100%; height: 100%; --poster-color: #ffffff; }}
+</style>
+<script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
+</head>
+<body>
+<model-viewer src="data:model/gltf-binary;base64,{glb_b64}" alt="PointDiT-{model_size}/16 LiteRT output"
+              camera-controls auto-rotate exposure="1.0"
+              environment-image="neutral" shadow-intensity="0">
+</model-viewer>
+</body>
+</html>
+"""
+standalone_html_path = f"{out_dir}/{stem}_litert_pointcloud_standalone.html"
+Path(standalone_html_path).write_text(standalone_html)
+standalone_size_mb = Path(standalone_html_path).stat().st_size / 1e6
+print(f"Wrote {standalone_html_path} ({standalone_size_mb:.1f} MB, one file, safe to download/AirDrop/email as-is)")

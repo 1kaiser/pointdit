@@ -540,3 +540,64 @@ print(f"screenshot pixel stddev: {pixel_std:.2f}")
 assert pixel_std > 3.0, "screenshot looks blank -- model-viewer likely failed to render real geometry"
 
 display(IPyImage(filename=screenshot_path))
+
+# %% [markdown]
+# ### A single, self-contained file for downloading to a phone
+#
+# The HTML above references its `.glb` as a separate sibling file -- fine for local viewing (once
+# served over HTTP, see the CORS note above), but not something you can just download and tap open
+# on a phone: the browser would need the `.glb` alongside it in the same folder, which most mobile
+# "open with browser" flows don't preserve. Embedding the GLB as a base64 `data:` URI directly
+# inside the `<model-viewer src="...">` attribute makes the page fully self-contained -- one file,
+# no server, no sibling asset, works from a bare `file://` open (verified below) exactly the way a
+# downloaded attachment would be opened on a phone. The real cost: base64 inflates the GLB's byte
+# size by ~33% embedded as text, so this is only practical up to some tens of MB.
+
+# %%
+import base64
+
+
+def write_standalone_modelviewer_html(glb_path, html_path, title):
+    glb_b64 = base64.b64encode(Path(glb_path).read_bytes()).decode("ascii")
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>{title}</title>
+<style>
+  html, body {{ margin: 0; height: 100%; background: #ffffff; }}
+  model-viewer {{ width: 100%; height: 100%; --poster-color: #ffffff; }}
+</style>
+<script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
+</head>
+<body>
+<model-viewer src="data:model/gltf-binary;base64,{glb_b64}" alt="{title}"
+              camera-controls auto-rotate exposure="1.0"
+              environment-image="neutral" shadow-intensity="0">
+</model-viewer>
+</body>
+</html>
+"""
+    Path(html_path).write_text(html)
+
+
+write_standalone_modelviewer_html(f"{out_dir}/aligned_merged.glb", f"{out_dir}/aligned_merged_standalone.html",
+                                   "PointDiT aligned merge (standalone)")
+standalone_size_mb = Path(f"{out_dir}/aligned_merged_standalone.html").stat().st_size / 1e6
+print(f"Wrote {out_dir}/aligned_merged_standalone.html ({standalone_size_mb:.1f} MB, one file, no server needed)")
+
+# Verify it too -- opened as bare file://, not served, since that's the whole point of this cell.
+standalone_abspath = str(Path(f"{out_dir}/aligned_merged_standalone.html").resolve())
+standalone_screenshot = f"{out_dir}/aligned_merged_standalone_screenshot.png"
+result = subprocess.run(
+    [NODE_BIN, "tools/litert/glb_viewer/verify_modelviewer.js",
+     f"file://{standalone_abspath}", standalone_screenshot],
+    capture_output=True, text=True,
+)
+if result.returncode != 0:
+    print(result.stderr[-2000:])
+assert result.returncode == 0
+standalone_std = np.asarray(Image.open(standalone_screenshot).convert("RGB")).astype(float).std()
+print(f"standalone file:// screenshot pixel stddev: {standalone_std:.2f}")
+assert standalone_std > 3.0
+display(IPyImage(filename=standalone_screenshot))
