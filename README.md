@@ -129,6 +129,14 @@ setup, and the browser demo.
 Pre-converted `.tflite` files for all 8 configurations (both PointDiT-L/16 and B/16) are attached
 to this fork's [Releases](../../releases) — download rather than reconverting from scratch.
 
+[`tools/litert/run_multiview_merge.py`](tools/litert/run_multiview_merge.py) additionally tests
+multi-image merging: matching images pairwise with [LoMa](https://github.com/davnords/LoMa) and
+fitting a similarity transform between each pair's matched 3D points to recover a shared frame
+across PointDiT's independent, zero-centered per-image predictions. Real result: this works well
+for adjacent-frame sequences, but is measurably unreliable at wider baselines (see the notebook
+and `tools/litert/README.md` for the full honest writeup, including a case where it makes the
+merge worse than doing nothing).
+
 ## Dataset Preparation
 
 See [DATASETS.md](DATASETS.md) for detailed instructions on preparing the 12 training datasets and the 7 zero-shot evaluation datasets. We have provided the download link for the 7 evaluation datasets in [DATASETS.md](DATASETS.md).

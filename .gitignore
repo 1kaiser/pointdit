@@ -174,6 +174,7 @@ results/
 logs/
 tmp/
 third_party/dinov3/
+third_party/LoMa/
 
 # tools/litert: converted/quantized model binaries and the GPU-reference cache are
 # distributed via GitHub Releases, never committed (see tools/litert/README.md).

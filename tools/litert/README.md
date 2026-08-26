@@ -22,6 +22,7 @@ your own copy of it locally to run anything in this directory.
 | `benchmark_pytorch_gpu.py` / `benchmark_litert_backends.py` | the real measured comparison (split across two conda envs — see script docstrings for why) |
 | `export_web_demo_inputs.py` / `_b16.py` | dumps real per-image tensors for the browser demo |
 | `run_litert_inference.py` (+ `.ipynb`) | **run this to actually use a converted model** — full image → depth/point-cloud generation with the denoiser routed through a `.tflite` interpreter, verified against the real PyTorch output on the same image |
+| `run_multiview_merge.py` (+ `.ipynb`) | multi-image inference + cross-image matching ([LoMa](https://github.com/davnords/LoMa)) + similarity-transform depth-map merging — see below |
 | `download_pinecone_bench.py` | fetches the real benchmark/calibration image set used above |
 | `web_demo/` | in-browser LiteRT.js demo (Playwright-driven headless-Chrome runner + a plain-HTML page) |
 | `models/` | **not in git** — converted `.tflite` files + the GPU-reference `.npz` go here locally; download pre-converted copies from the [Release](../../../../releases) or regenerate with the scripts above |
@@ -71,6 +72,32 @@ quantization comparison table and conclusions (short version: weight-only int8 i
 accuracy/robustness tradeoff; none of the 8 configurations beat plain PyTorch on this project's
 own architecture; single-step accuracy understates full-generation accuracy by roughly 10x —
 measure at the granularity you'll actually deploy at).
+
+## Multi-image merging with cross-image matching (LoMa)
+
+PointDiT predicts each image's point map independently and zero-centered — there's no shared
+frame across images by construction. `run_multiview_merge.py` tests whether adding
+[LoMa](https://github.com/davnords/LoMa) (ECCV 2026, ungated Apache-2.0/MIT local feature matcher)
++ a robust similarity-transform fit (Umeyama + RANSAC) on the matched pixels' predicted 3D points
+recovers a real shared frame across a sequence of images.
+
+```bash
+uv pip install --python "$(which python)" -e third_party/LoMa   # after cloning it there
+jupytext --to notebook tools/litert/run_multiview_merge.py -o /tmp/run.ipynb --set-kernel pointdit_litert
+CUDA_VISIBLE_DEVICES="" papermill /tmp/run.ipynb /tmp/run_out.ipynb --kernel pointdit_litert \
+  -p stride 1 -p num_images 6   # stride=1: adjacent frames; try a larger stride for a wider baseline
+```
+
+**Real, measured result — it depends on baseline, and don't trust the residual metric alone:**
+adjacent-frame sequences (`stride=1`) align well (median matched-point residual drops 5-12x,
+plausible 4-8° per-hop rotations, both merges visually coherent). Widely-spaced sequences
+(`stride=16` across the same 99-image set) report an equally good-looking residual but recover
+**implausible 38-143° per-hop rotations** — a low residual on a small, possibly-degenerate RANSAC
+inlier set does not mean the transform is correct, and the resulting chain-composed merge is
+visibly *worse* than not aligning at all. See the notebook's own section 10 for the full
+before/after table and root-cause discussion (this is a real limitation of independent pairwise
+fits + naive chain composition, not a bug — a rotation-plausibility gate or genuine global
+refinement across all pairs would be the real fix, not attempted here).
 
 ## Browser demo
 
