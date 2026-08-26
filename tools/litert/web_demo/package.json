@@ -1,0 +1,16 @@
+{
+  "name": "web_demo",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@litertjs/core": "^2.5.3",
+    "playwright-core": "^1.62.1"
+  }
+}

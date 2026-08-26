@@ -88,6 +88,46 @@ bash scripts/demo_l_512.sh
 
 Any `.jpg`/`.png` files work, and nested folders are fine, since the loader globs recursively. Results are written to `generation/`.
 
+Also see [`notebooks/`](notebooks) for parameterized, re-runnable Jupyter versions of this demo
+(one driving `main.py` via subprocess, one with the full setup/generation logic inlined into the
+notebook itself).
+
+## LiteRT / on-device inference
+
+*Community addition — not part of the original release.* [`tools/litert/`](tools/litert)
+converts the per-step denoiser network to [LiteRT](https://ai.google.dev/edge/litert) (`.tflite`)
+and measures 8 quantization strategies against the real PyTorch GPU/CPU baselines, on 14 held-out
+images from the `pinecone` scene of the [mip-NeRF 360](https://huggingface.co/datasets/1kaiser/NERF_360)
+dataset. Only the denoiser transformer is converted — the frozen DINOv3 encoder's output is a
+separate graph *input*, never baked into the exported model, so it stays gated exactly as
+elsewhere in this repo; nothing gated is redistributed by any `.tflite` file here.
+
+| Backend | Latency (mean) | vs PyTorch-GPU | Accuracy (max abs diff, single step) |
+|---|---:|---:|---:|
+| PyTorch GPU | 99.75 ms | reference | reference |
+| PyTorch CPU | 460 ms | 4.6x slower | 8.3e-6 (float noise) |
+| LiteRT fp32 | 2201 ms | 22x slower | 8.3e-6 (clean conversion) |
+| LiteRT int8 static (act+weight) | 7763 ms | 78x slower | 0.345 (broken) |
+| LiteRT int8 dynamic | 1213 ms | 12x slower | 0.020 |
+| LiteRT int8 weight-only | 2200 ms | 22x slower | **0.007 (best accuracy)** |
+| LiteRT int4 dynamic | 1214 ms | 12x slower | 0.103 |
+| LiteRT int4 weight-only | 17753 ms | 178x slower | 0.104 |
+
+None of the 8 configurations beat plain PyTorch-GPU (or even PyTorch-CPU) on this architecture on
+the machine this was measured on — XNNPACK's kernels are CNN/mobile-tuned, and this is a
+large, matmul-heavy ViT. Weight-only int8 is the recommended variant when a `.tflite` deployment
+is the actual goal (e.g. mobile/browser, not a speed win on desktop CPU): best accuracy of the six
+usable configs, and the only one that also ran correctly end-to-end in a browser via
+[LiteRT.js](https://ai.google.dev/edge/litert/web) (PointDiT-B/16; PointDiT-L/16 hits a real
+WASM32 model-size ceiling in that runtime). **Full-generation accuracy is worse than the
+single-step numbers above** — errors compound across the euler sampling loop (weight-only int8
+measured 0.0999 max abs diff over a real 3-step generation, vs. 0.007 for one isolated call); see
+[`tools/litert/run_litert_inference.py`](tools/litert/run_litert_inference.py) to reproduce this
+directly, and [`tools/litert/README.md`](tools/litert/README.md) for the full writeup, environment
+setup, and the browser demo.
+
+Pre-converted `.tflite` files for all 8 configurations (both PointDiT-L/16 and B/16) are attached
+to this fork's [Releases](../../releases) — download rather than reconverting from scratch.
 
 ## Dataset Preparation
 

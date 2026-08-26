@@ -1,0 +1,135 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>PointDiT LiteRT.js weight-only int8 web demo</title></head>
+<body>
+<pre id="status">loading...</pre>
+<script type="importmap">
+{
+  "imports": {
+    "@litertjs/wasm-utils": "./node_modules/@litertjs/wasm-utils/dist/index.js"
+  }
+}
+</script>
+<script type="module">
+import {loadLiteRt, loadAndCompile, Tensor, setWebGpuDevice} from './node_modules/@litertjs/core/dist/index.js';
+
+const statusEl = document.getElementById('status');
+function log(msg) {
+  console.log(msg);
+  statusEl.textContent += '\n' + msg;
+}
+
+async function fetchFloat32(path) {
+  const buf = await (await fetch(path)).arrayBuffer();
+  return new Float32Array(buf);
+}
+
+async function main() {
+  const shapes = await (await fetch('./assets_b16/shapes.json')).json();
+  log('shapes: ' + JSON.stringify(shapes));
+
+  // Create our OWN WebGPU device and hand it to LiteRT.js via setWebGpuDevice()
+  // BEFORE loadLiteRt()/loadAndCompile() try to auto-create one internally.
+  // Real bug worked around here: requestAdapter() can transiently return null
+  // on the very first call in a fresh headless-Chrome page (a documented,
+  // known Chrome cold-start flakiness -- see the headless-chrome-webgpu
+  // skill), and LiteRT.js's own internal auto-creation does not retry, so it
+  // silently gives up ("Failed to create default WebGPU device: No GPU
+  // adapter found") and every later loadAndCompile({accelerator:'webgpu'})
+  // call fails with "no WebGPU device is set in the environment" -- even
+  // though a plain retry loop, run a moment later, finds the real adapter
+  // fine. Confirmed live: this is exactly what happened on the first two
+  // attempts building this demo.
+  let adapterInfo = 'no navigator.gpu';
+  let gpuDevice = null;
+  if (navigator.gpu) {
+    for (let i = 0; i < 5; i++) {
+      const adapter = await navigator.gpu.requestAdapter();
+      if (adapter) {
+        const info = adapter.info || {};
+        adapterInfo = `vendor=${info.vendor} architecture=${info.architecture} device=${info.device}`;
+        gpuDevice = await adapter.requestDevice();
+        break;
+      }
+      await new Promise(r => setTimeout(r, 500));
+    }
+  }
+  log('WebGPU adapter: ' + adapterInfo);
+
+  log('loading LiteRT wasm runtime...');
+  await loadLiteRt('./node_modules/@litertjs/core/wasm/', {jspi: true});
+
+  // setWebGpuDevice() requires loadLiteRt() to have already resolved -- confirmed
+  // live ("LiteRT is not initialized yet") when called beforehand; the real,
+  // correct order is loadLiteRt() THEN setWebGpuDevice() THEN loadAndCompile().
+  if (gpuDevice) {
+    setWebGpuDevice(gpuDevice);
+    log('supplied our own GPUDevice to LiteRT.js via setWebGpuDevice()');
+  }
+
+  // 'webgpu' hits a real runtime crash on this model: the WebGPU delegate only
+  // covers ops with rank <=4, PointDiT's attention reshapes need higher rank,
+  // so 2211 of 2590 ops fall back to CPU per-op, and that much partitioning
+  // aborts the wasm runtime outright (not a clean JS exception). Given our
+  // own Python benchmark already found WebGPU/XNNPACK wasn't the fast path
+  // for this architecture anyway (see research-repo-bringup skill section
+  // 11), 'wasm' (pure CPU, no GPU partitioning) is the more robust real
+  // target here, not a fallback of convenience.
+  const accelerator = 'wasm';
+  log(`loading + compiling model.tflite (${accelerator} accelerator)...`);
+  const t0 = performance.now();
+  const model = await loadAndCompile('./model_b16.tflite', {accelerator});
+  log(`model compiled in ${(performance.now() - t0).toFixed(1)} ms`);
+
+  const [z, t, labels, cached_y_emb, ref_output] = await Promise.all(
+    ['z', 't', 'labels', 'cached_y_emb', 'ref_output'].map(n => fetchFloat32(`./assets_b16/${n}.bin`)));
+
+  const inputs = {
+    args_0: new Tensor(z, shapes.z),
+    args_1: new Tensor(t, shapes.t),
+    args_2: new Tensor(labels, shapes.labels),
+    cached_y_emb: new Tensor(cached_y_emb, shapes.cached_y_emb),
+  };
+
+  log('running warmup call...');
+  let warm = await model.run(inputs);
+  for (const k in warm) warm[k].delete();
+
+  log('running timed call...');
+  const t1 = performance.now();
+  const results = await model.run(inputs);
+  const elapsed = performance.now() - t1;
+  log(`inference latency: ${elapsed.toFixed(1)} ms`);
+
+  const outKey = Object.keys(results)[0];
+  const outTensorCpu = await results[outKey].moveTo('wasm');
+  const outArr = outTensorCpu.toTypedArray();
+
+  let maxDiff = 0, sumDiff = 0;
+  for (let i = 0; i < outArr.length; i++) {
+    const d = Math.abs(outArr[i] - ref_output[i]);
+    if (d > maxDiff) maxDiff = d;
+    sumDiff += d;
+  }
+  log(`output length: ${outArr.length} (expected ${ref_output.length})`);
+  log(`max abs diff vs PyTorch-GPU reference: ${maxDiff.toExponential(4)}`);
+  log(`mean abs diff: ${(sumDiff / outArr.length).toExponential(4)}`);
+
+  for (const k in inputs) inputs[k].delete();
+  for (const k in results) results[k].delete();
+  outTensorCpu.delete();
+
+  statusEl.textContent += '\nDONE';
+  window.__demoDone = true;
+  window.__demoResult = {adapterInfo, latencyMs: elapsed, maxDiff, meanDiff: sumDiff / outArr.length};
+}
+
+main().catch(err => {
+  log('ERROR: ' + err.message);
+  log(err.stack);
+  window.__demoDone = true;
+  window.__demoError = err.message;
+});
+</script>
+</body>
+</html>
