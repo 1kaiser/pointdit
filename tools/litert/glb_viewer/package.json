@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "gltfjsx": "^6.2.13",
+    "playwright-core": "^1.62.1"
+  }
+}

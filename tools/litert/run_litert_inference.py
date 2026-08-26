@@ -351,3 +351,122 @@ standalone_html_path = f"{out_dir}/{stem}_litert_pointcloud_standalone.html"
 Path(standalone_html_path).write_text(standalone_html)
 standalone_size_mb = Path(standalone_html_path).stat().st_size / 1e6
 print(f"Wrote {standalone_html_path} ({standalone_size_mb:.1f} MB, one file, safe to download/AirDrop/email as-is)")
+
+# %% [markdown]
+# ## 10. Point-map to mesh (grid triangulation), and the `1kaiser/Q` model-size-reducer
+#
+# So far every `.glb` above is a bare point cloud (a glTF `POINTS` primitive) -- real, but sparse
+# dots, not a connected surface. PointDiT's point map is a *regular* per-pixel grid though (not an
+# unstructured scan), so building a real mesh doesn't need general point-cloud reconstruction
+# (Poisson/ball-pivoting) -- a standard depth-map grid triangulation (each 2x2 pixel block -> two
+# triangles) is exact and cheap for this data shape. `depth_flying_points` (already in this repo,
+# already used by the real demo pipeline for the same purpose) flags pixels that sit at a depth
+# discontinuity between foreground and background -- any quad touching one of those pixels is
+# dropped, instead of stretching a triangle across the gap (the classic "flying pixels" artifact).
+
+# %%
+import trimesh
+from util.viz_pointcloud import depth_flying_points
+
+
+def pointmap_to_mesh(pointmap, rgb_uint8, rtol=0.04):
+    """pointmap: (3, H, W) raw XYZ (pre-GL-flip). rgb_uint8: (H, W, 3). Returns a trimesh.Trimesh
+    with the same Y/Z GL flip save_single_point_cloud applies, and the same winding both this
+    notebook and run_multiview_merge.py use (verified by real render, not derived by hand)."""
+    H, W = pointmap.shape[1:]
+    flying = depth_flying_points(pointmap[2], rtol=rtol)  # (H, W) bool -- True = bad pixel
+
+    pts = pointmap.transpose(1, 2, 0).copy()
+    pts[:, :, 1] *= -1
+    pts[:, :, 2] *= -1
+    verts = pts.reshape(-1, 3)
+    vcolors = rgb_uint8.reshape(-1, 3)
+
+    ii, jj = np.meshgrid(np.arange(H - 1), np.arange(W - 1), indexing="ij")
+    idx = lambda r, c: r * W + c
+    v00, v01, v10, v11 = idx(ii, jj), idx(ii, jj + 1), idx(ii + 1, jj), idx(ii + 1, jj + 1)
+    bad = flying[ii, jj] | flying[ii, jj + 1] | flying[ii + 1, jj] | flying[ii + 1, jj + 1]
+    v00, v01, v10, v11 = v00[~bad], v01[~bad], v10[~bad], v11[~bad]
+
+    faces = np.concatenate([
+        np.stack([v00, v10, v01], axis=1),
+        np.stack([v01, v10, v11], axis=1),
+    ], axis=0)
+    return trimesh.Trimesh(vertices=verts, faces=faces, vertex_colors=vcolors, process=False)
+
+
+flying_frac = depth_flying_points(litert_pointcloud[0, 2]).mean()
+mesh = pointmap_to_mesh(litert_pointcloud[0], (arr * 255).astype(np.uint8))
+mesh_glb_path = f"{out_dir}/{stem}_mesh.glb"
+mesh.export(mesh_glb_path)
+print(f"mesh: {len(mesh.vertices):,} verts, {len(mesh.faces):,} faces "
+      f"({flying_frac:.1%} of pixels flagged as depth discontinuities and excluded)")
+print(f"{mesh_glb_path}: {Path(mesh_glb_path).stat().st_size/1e6:.1f} MB "
+      f"(vs. {Path(f'{out_dir}/{stem}_litert_pointcloud.glb').stat().st_size/1e6:.1f} MB for the bare point cloud)")
+
+# %% [markdown]
+# ### The `1kaiser/Q` "model size reducer" -- `gltfjsx --transform` -- and a real, confirmed gap
+#
+# [`1kaiser/Q`](https://github.com/1kaiser/Q)'s README documents `npx gltfjsx {file} --transform`
+# (prune + Draco compression + texture resizing) as the way to shrink a GLB for the web. Applying
+# it here is a real, honest mixed result, not a clean win:
+#
+# - It **only works on a real mesh, not a bare point cloud** -- tried directly on this notebook's
+#   point-cloud GLB and it crashed (`weld` in `@gltf-transform/functions` throws
+#   `Cannot read properties of null (reading 'getCount')` with no face/index data to weld). The
+#   mesh built above is a genuine prerequisite for using this tool at all, not just a nicer viewer.
+# - On the mesh, it worked and cut size roughly in half (9.09MB -> 4.11MB in real testing) --
+#   but **the compressed output silently fails to render** in the plain CDN `<model-viewer>` build
+#   used throughout this notebook. Confirmed three independent ways, not just one: (1) `trimesh`
+#   itself warns `KHR_draco_mesh_compression GLTF extension has no handler, values are placeholder
+#   zeros` when reading it back; (2) a real headless-Chrome screenshot of the compressed file comes
+#   back blank; (3) `unpkg.com/@google/model-viewer/dist/model-viewer.min.js` itself contains
+#   **zero** occurrences of the strings `"draco"` or `"gstatic"` -- this specific CDN build simply
+#   has no Draco decoder registered at all, so `KHR_draco_mesh_compression` geometry silently
+#   decodes to nothing.
+# - **Practical conclusion for this pipeline**: build the mesh (real, working, and already smaller
+#   than you might expect a mesh to be relative to its source point cloud once flying points are
+#   dropped), but skip `--transform`'s Draco step until a Draco-decoder-enabled model-viewer build
+#   is specifically set up and verified -- random point/vertex subsampling (already used elsewhere
+#   in this repo for the same size-cap problem) is the working alternative today.
+
+# %%
+import functools
+import http.server
+import subprocess
+import threading
+
+from IPython.display import Image as IPyImage, display
+
+NODE_BIN = "/home/kaiser/.conda/envs/node20/bin/node"
+
+verify_html = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
+<style>html,body{{margin:0;height:100%;background:#fff;}}model-viewer{{width:100%;height:100%;}}</style>
+</head><body><model-viewer src="{Path(mesh_glb_path).name}" camera-controls auto-rotate
+exposure="1.0" environment-image="neutral" shadow-intensity="0"></model-viewer></body></html>
+"""
+mesh_view_path = f"{out_dir}/{stem}_mesh_view.html"
+Path(mesh_view_path).write_text(verify_html)
+
+# Serve rather than open as file:// -- same CORS reason as run_multiview_merge.py section 11.
+handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=out_dir)
+httpd2 = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+threading.Thread(target=httpd2.serve_forever, daemon=True).start()
+port2 = httpd2.server_address[1]
+
+mesh_screenshot = f"{out_dir}/{stem}_mesh_screenshot.png"
+result = subprocess.run(
+    [NODE_BIN, "tools/litert/glb_viewer/verify_modelviewer.js",
+     f"http://127.0.0.1:{port2}/{Path(mesh_view_path).name}", mesh_screenshot],
+    capture_output=True, text=True,
+)
+httpd2.shutdown()
+if result.returncode != 0:
+    print(result.stderr[-1500:])
+assert result.returncode == 0
+mesh_std = np.asarray(Image.open(mesh_screenshot).convert("RGB")).astype(float).std()
+print(f"mesh screenshot pixel stddev: {mesh_std:.2f}")
+assert mesh_std > 3.0, "mesh render looks blank"
+display(IPyImage(filename=mesh_screenshot))
