@@ -1,0 +1,165 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>PointDiT-B/16 LiteRT.js web demo (hosted, no local setup)</title></head>
+<body>
+<pre id="status">loading...</pre>
+<script type="module">
+// Single self-contained file, no npm install and no locally-placed model needed:
+// - @litertjs/core loads from a CDN, unless the fast threaded runtime (see below) is available,
+//   in which case it loads from the ./wasm/ files committed alongside this page (same-origin --
+//   required, see loadRuntime()).
+// - the .tflite model itself is fetched at runtime from a public, CORS-open host
+//   (huggingface.co/1kaiser/pointdit-litert) rather than a local file -- verified for a real
+//   reason, not copied blindly: GitHub Release assets send no Access-Control-Allow-Origin header
+//   at all (checked with `curl -I` on this repo's own release), so a page fetching one from
+//   anywhere other than github.com is blocked by CORS; Hugging Face's CDN sends
+//   `access-control-allow-origin: *` (checked the same way).
+//
+// This whole dual-runtime structure (threaded-if-possible, portable-fallback) mirrors a real
+// prior project on this same machine (1kaiser/astro's moge-jax-lite/webgpu_demo) -- see its
+// serve.py and index.html for the original, this is the same real mechanism adapted to
+// PointDiT's own fixed-example denoiser demo rather than a live image upload.
+import {loadLiteRt, loadAndCompile, Tensor, setWebGpuDevice} from 'https://cdn.jsdelivr.net/npm/@litertjs/core@2.5.3/+esm';
+
+const MODEL_URL = 'https://huggingface.co/1kaiser/pointdit-litert/resolve/main/pointdit_b16_denoiser_step_weightonly.tflite';
+
+const statusEl = document.getElementById('status');
+function log(msg) {
+  console.log(msg);
+  statusEl.textContent += '\n' + msg;
+}
+
+async function fetchFloat32(path) {
+  const buf = await (await fetch(path)).arrayBuffer();
+  return new Float32Array(buf);
+}
+
+// The *threaded* XNNPACK build runs this CPU-bound model meaningfully faster than the portable
+// single-threaded build (see README/skill for the real measured numbers), because most of
+// PointDiT's ops run on CPU regardless of whether a GPU delegate is active. It has two hard,
+// real requirements, both checked here at runtime -- neither is optional, and there's no
+// partial/degraded threaded mode, only "works" or "falls back cleanly":
+//   1. cross-origin isolation (COOP/COEP response headers -> real SharedArrayBuffer support) --
+//      a plain `python -m http.server` does NOT send these; a companion server that does
+//      (serve_threaded.py, next to this file) is what actually enables this path.
+//   2. same-origin wasm files -- the threaded runtime spawns real Worker()s internally, and
+//      Workers reject cross-origin (CDN) script URLs outright; the CDN copy genuinely cannot be
+//      used for this path, which is why ./wasm/*.internal.{js,wasm} are committed alongside this
+//      page rather than fetched from jsdelivr like the portable path's wasm.
+async function loadRuntime() {
+  if (crossOriginIsolated) {
+    try {
+      log('crossOriginIsolated: true -- attempting the fast threaded WASM runtime...');
+      await loadLiteRt(new URL('wasm/litert_wasm_threaded_internal.js', location.href).href, {threads: true});
+      log('threaded runtime loaded (same-origin ./wasm/ files, COOP/COEP headers present)');
+      return true;
+    } catch (err) {
+      log('threaded runtime failed to load, falling back to portable CDN path: ' + err.message);
+    }
+  } else {
+    log('crossOriginIsolated: false (served without COOP/COEP headers, e.g. plain http.server) '
+      + '-- using the portable CDN runtime. See serve_threaded.py for the fast path.');
+  }
+  // Portable path: works on any static host, no special headers, no local files needed at all.
+  // {jspi:true} -- the JS-Promise-Integration build, not Emscripten's Asyncify polyfill (fixes a
+  // real "Asyncify is not defined" error hit earlier building this project's demos).
+  await loadLiteRt('https://cdn.jsdelivr.net/npm/@litertjs/core@2.5.3/wasm/', {jspi: true});
+  return false;
+}
+
+async function main() {
+  const shapes = await (await fetch('./assets_b16/shapes.json')).json();
+  log('shapes: ' + JSON.stringify(shapes));
+
+  // Real WebGPU adapter cold-start retry -- requestAdapter() can transiently return null on the
+  // very first call in a fresh page (see headless-chrome-webgpu skill); a plain retry loop fixes
+  // it. Not actually used for compute here (see accelerator choice below) but reported for
+  // parity with this project's other demos.
+  let adapterInfo = 'no navigator.gpu';
+  if (navigator.gpu) {
+    for (let i = 0; i < 5; i++) {
+      const adapter = await navigator.gpu.requestAdapter();
+      if (adapter) {
+        const info = adapter.info || {};
+        adapterInfo = `vendor=${info.vendor} architecture=${info.architecture} device=${info.device}`;
+        break;
+      }
+      await new Promise(r => setTimeout(r, 500));
+    }
+  }
+  log('WebGPU adapter: ' + adapterInfo);
+
+  const threaded = await loadRuntime();
+
+  // 'wasm', never 'webgpu' -- the WebGPU delegate's rank<=4 op limit crashes on this model's
+  // attention reshapes (see research-repo-bringup skill). This holds for both runtimes: the
+  // threaded build has no JSPI/Asyncify plumbing at all (threads and webgpu are mutually
+  // exclusive in this library's shipped builds), and the portable build hits the rank-limit
+  // crash directly -- 'wasm' is the real working accelerator either way, not a fallback of
+  // convenience.
+  const accelerator = 'wasm';
+
+  log(`downloading model from ${MODEL_URL} ...`);
+  const t0 = performance.now();
+  const modelResp = await fetch(MODEL_URL);
+  if (!modelResp.ok) throw new Error(`model fetch failed: HTTP ${modelResp.status}`);
+  const modelBytes = new Uint8Array(await modelResp.arrayBuffer());
+  log(`downloaded ${(modelBytes.length / 1e6).toFixed(1)} MB in ${(performance.now() - t0).toFixed(0)} ms`);
+
+  log(`compiling (${accelerator} accelerator, ${threaded ? 'threaded' : 'portable'} runtime)...`);
+  const t1 = performance.now();
+  const model = await loadAndCompile(modelBytes, {accelerator});
+  log(`model compiled in ${(performance.now() - t1).toFixed(1)} ms`);
+
+  const [z, t, labels, cached_y_emb, ref_output] = await Promise.all(
+    ['z', 't', 'labels', 'cached_y_emb', 'ref_output'].map(n => fetchFloat32(`./assets_b16/${n}.bin`)));
+
+  const inputs = {
+    args_0: new Tensor(z, shapes.z),
+    args_1: new Tensor(t, shapes.t),
+    args_2: new Tensor(labels, shapes.labels),
+    cached_y_emb: new Tensor(cached_y_emb, shapes.cached_y_emb),
+  };
+
+  log('running warmup call...');
+  let warm = await model.run(inputs);
+  for (const k in warm) warm[k].delete();
+
+  log('running timed call...');
+  const t2 = performance.now();
+  const results = await model.run(inputs);
+  const elapsed = performance.now() - t2;
+  log(`inference latency: ${elapsed.toFixed(1)} ms (${threaded ? 'threaded' : 'portable'} runtime)`);
+
+  const outKey = Object.keys(results)[0];
+  const outTensorCpu = await results[outKey].moveTo('wasm');
+  const outArr = outTensorCpu.toTypedArray();
+
+  let maxDiff = 0, sumDiff = 0;
+  for (let i = 0; i < outArr.length; i++) {
+    const d = Math.abs(outArr[i] - ref_output[i]);
+    if (d > maxDiff) maxDiff = d;
+    sumDiff += d;
+  }
+  log(`output length: ${outArr.length} (expected ${ref_output.length})`);
+  log(`max abs diff vs PyTorch-GPU reference: ${maxDiff.toExponential(4)}`);
+  log(`mean abs diff: ${(sumDiff / outArr.length).toExponential(4)}`);
+
+  for (const k in inputs) inputs[k].delete();
+  for (const k in results) results[k].delete();
+  outTensorCpu.delete();
+
+  statusEl.textContent += '\nDONE';
+  window.__demoDone = true;
+  window.__demoResult = {adapterInfo, threaded, latencyMs: elapsed, maxDiff, meanDiff: sumDiff / outArr.length};
+}
+
+main().catch(err => {
+  log('ERROR: ' + err.message);
+  log(err.stack);
+  window.__demoDone = true;
+  window.__demoError = err.message;
+});
+</script>
+</body>
+</html>
