@@ -1,0 +1,127 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>PointDiT-B/16 LiteRT.js web demo (hosted, no local setup)</title></head>
+<body>
+<pre id="status">loading...</pre>
+<script type="module">
+// Self-sufficient version of index_b16.html: no local node_modules, no local model file.
+// @litertjs/core loads from a CDN and the .tflite model is fetched from a public,
+// CORS-open host at runtime -- the same real pattern this repo's own prior project used
+// (1kaiser/astro's moge-jax-lite/webgpu_demo), verified for a real reason, not copied blindly:
+// GitHub Release assets send NO Access-Control-Allow-Origin header at all (confirmed with
+// `curl -I` on this repo's own litert-v1 release -- a browser fetch() from any other origin
+// is blocked), while huggingface.co's CDN sends `access-control-allow-origin: *` (confirmed
+// the same way) -- that's why the model below is hosted on HF Hub, not attached to the
+// GitHub Release like the .tflite files this repo also ships.
+import {loadLiteRt, loadAndCompile, Tensor, setWebGpuDevice} from 'https://cdn.jsdelivr.net/npm/@litertjs/core@2.5.3/+esm';
+
+const MODEL_URL = 'https://huggingface.co/1kaiser/pointdit-litert/resolve/main/pointdit_b16_denoiser_step_weightonly.tflite';
+
+const statusEl = document.getElementById('status');
+function log(msg) {
+  console.log(msg);
+  statusEl.textContent += '\n' + msg;
+}
+
+async function fetchFloat32(path) {
+  const buf = await (await fetch(path)).arrayBuffer();
+  return new Float32Array(buf);
+}
+
+async function main() {
+  const shapes = await (await fetch('./assets_b16/shapes.json')).json();
+  log('shapes: ' + JSON.stringify(shapes));
+
+  // Same real WebGPU adapter cold-start retry as index_b16.html -- see that file's comments
+  // (and the headless-chrome-webgpu skill) for the full story; kept identical here.
+  let adapterInfo = 'no navigator.gpu';
+  let gpuDevice = null;
+  if (navigator.gpu) {
+    for (let i = 0; i < 5; i++) {
+      const adapter = await navigator.gpu.requestAdapter();
+      if (adapter) {
+        const info = adapter.info || {};
+        adapterInfo = `vendor=${info.vendor} architecture=${info.architecture} device=${info.device}`;
+        gpuDevice = await adapter.requestDevice();
+        break;
+      }
+      await new Promise(r => setTimeout(r, 500));
+    }
+  }
+  log('WebGPU adapter: ' + adapterInfo);
+
+  log('loading LiteRT wasm runtime (CDN)...');
+  await loadLiteRt('https://cdn.jsdelivr.net/npm/@litertjs/core@2.5.3/wasm/', {jspi: true});
+
+  if (gpuDevice) {
+    setWebGpuDevice(gpuDevice);
+    log('supplied our own GPUDevice to LiteRT.js via setWebGpuDevice()');
+  }
+
+  // 'wasm', not 'webgpu' -- same real reason as index_b16.html: the WebGPU delegate's rank<=4
+  // op limit crashes on this model's attention reshapes (see research-repo-bringup skill).
+  const accelerator = 'wasm';
+  log(`downloading model from ${MODEL_URL} ...`);
+  const t0 = performance.now();
+  const modelResp = await fetch(MODEL_URL);
+  if (!modelResp.ok) throw new Error(`model fetch failed: HTTP ${modelResp.status}`);
+  const modelBytes = new Uint8Array(await modelResp.arrayBuffer());
+  log(`downloaded ${(modelBytes.length / 1e6).toFixed(1)} MB in ${(performance.now() - t0).toFixed(0)} ms`);
+
+  log(`compiling (${accelerator} accelerator)...`);
+  const t1 = performance.now();
+  const model = await loadAndCompile(modelBytes, {accelerator});
+  log(`model compiled in ${(performance.now() - t1).toFixed(1)} ms`);
+
+  const [z, t, labels, cached_y_emb, ref_output] = await Promise.all(
+    ['z', 't', 'labels', 'cached_y_emb', 'ref_output'].map(n => fetchFloat32(`./assets_b16/${n}.bin`)));
+
+  const inputs = {
+    args_0: new Tensor(z, shapes.z),
+    args_1: new Tensor(t, shapes.t),
+    args_2: new Tensor(labels, shapes.labels),
+    cached_y_emb: new Tensor(cached_y_emb, shapes.cached_y_emb),
+  };
+
+  log('running warmup call...');
+  let warm = await model.run(inputs);
+  for (const k in warm) warm[k].delete();
+
+  log('running timed call...');
+  const t2 = performance.now();
+  const results = await model.run(inputs);
+  const elapsed = performance.now() - t2;
+  log(`inference latency: ${elapsed.toFixed(1)} ms`);
+
+  const outKey = Object.keys(results)[0];
+  const outTensorCpu = await results[outKey].moveTo('wasm');
+  const outArr = outTensorCpu.toTypedArray();
+
+  let maxDiff = 0, sumDiff = 0;
+  for (let i = 0; i < outArr.length; i++) {
+    const d = Math.abs(outArr[i] - ref_output[i]);
+    if (d > maxDiff) maxDiff = d;
+    sumDiff += d;
+  }
+  log(`output length: ${outArr.length} (expected ${ref_output.length})`);
+  log(`max abs diff vs PyTorch-GPU reference: ${maxDiff.toExponential(4)}`);
+  log(`mean abs diff: ${(sumDiff / outArr.length).toExponential(4)}`);
+
+  for (const k in inputs) inputs[k].delete();
+  for (const k in results) results[k].delete();
+  outTensorCpu.delete();
+
+  statusEl.textContent += '\nDONE';
+  window.__demoDone = true;
+  window.__demoResult = {adapterInfo, latencyMs: elapsed, maxDiff, meanDiff: sumDiff / outArr.length};
+}
+
+main().catch(err => {
+  log('ERROR: ' + err.message);
+  log(err.stack);
+  window.__demoDone = true;
+  window.__demoError = err.message;
+});
+</script>
+</body>
+</html>
