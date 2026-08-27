@@ -133,11 +133,16 @@ python3 serve_threaded.py 8974 &   # sends the two headers the threaded path nee
 node run_demo.js "http://127.0.0.1:8974/index.html"
 # or: python3 -m http.server 8974 &   -- also works, just uses the slower portable path
 ```
-**Real, measured result**: the threaded runtime is **14.7x faster** than the portable one
-(5361ms -> 365ms for one denoising step), with identical accuracy (7.8785e-3 max abs diff vs. the
-PyTorch-GPU reference, matching the already-measured weight-only int8 B/16 number exactly).
-`tools/litert/verify_hosted_web_demo.py` tests both configurations for real, not just the
-default -- see there and the `research-repo-bringup` skill for the full writeup of why the
-threaded path needs two specific things (COOP/COEP response headers, and same-origin WASM files
-since the threaded build spawns real cross-origin-rejecting `Worker()`s) and why `serve_threaded.py`
+The page runs the real 3-step euler generation loop (not just one denoiser call) and renders the
+actual reconstructed point cloud via `THREE.js` + `GLTFExporter` + `<model-viewer>` -- the same
+real visualization approach the reference project uses, not just a numeric accuracy check.
+
+**Real, measured result**: the threaded runtime is **10.4x faster** than the portable one for the
+full 3-step generation (16172ms -> 1560ms), building the identical 65,536-point cloud either way
+(numeric accuracy against the PyTorch reference is already established by
+`run_litert_inference.py`'s own checks, using the same math). `tools/litert/verify_hosted_web_demo.py`
+tests both configurations for real, not just the default -- see there and the `research-repo-bringup`
+skill for the full writeup of why the threaded path needs two specific things (COOP/COEP response
+headers, and same-origin WASM files since the threaded build spawns real cross-origin-rejecting
+`Worker()`s) and why `serve_threaded.py`
 provides them.
