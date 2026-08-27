@@ -110,23 +110,34 @@ node run_demo.js       # PointDiT-L/16: hits a real WASM32 size ceiling in this 
 node run_demo_b16.js   # PointDiT-B/16: runs correctly (see README/skill for the full writeup)
 ```
 
-### `index_hosted_b16.html` -- no local setup needed
+### `hosted/index.html` -- no local setup needed, with a fast Web-Worker path
 
-The two demos above need a local `npm install` and a locally-placed `.tflite` file. `index_hosted_b16.html`
-doesn't: `@litertjs/core` loads from jsdelivr's CDN and the model is fetched at runtime from
-[`huggingface.co/1kaiser/pointdit-litert`](https://huggingface.co/1kaiser/pointdit-litert) instead of a
-local file -- the same real pattern this repo's own prior project
+The two demos above need a local `npm install` and a locally-placed `.tflite` file.
+[`hosted/index.html`](web_demo/hosted/index.html) doesn't: `@litertjs/core` loads from jsdelivr's
+CDN and the model is fetched at runtime from
+[`huggingface.co/1kaiser/pointdit-litert`](https://huggingface.co/1kaiser/pointdit-litert) instead
+of a local file -- the same real pattern this repo's own prior project
 ([`1kaiser/astro`'s `moge-jax-lite/webgpu_demo`](https://github.com/1kaiser/astro/tree/main/moge-jax-lite/webgpu_demo))
 uses, and for the same concrete reason: GitHub Release assets send no `Access-Control-Allow-Origin`
 header at all (`curl -I` on this repo's own `litert-v1` release shows none), so a page fetching one
 from anywhere other than github.com is blocked by CORS -- Hugging Face's CDN sends
 `access-control-allow-origin: *`, confirmed the same way on the model uploaded there for this demo.
 
+It also detects and uses LiteRT.js's **threaded WASM runtime** (real Web Workers, not just async
+`fetch()`) whenever it's actually available, falling back to the portable single-threaded CDN
+runtime otherwise -- again mirroring the same prior project:
+
 ```bash
-cd tools/litert/web_demo
-python -m http.server 8974 &   # serve, don't open as file:// -- see the CORS note in tools/litert/README.md's browser-demo section
-node run_demo_hosted_b16.js "http://127.0.0.1:8974/index_hosted_b16.html"
+cd tools/litert/web_demo/hosted
+python3 serve_threaded.py 8974 &   # sends the two headers the threaded path needs -- see below
+node run_demo.js "http://127.0.0.1:8974/index.html"
+# or: python3 -m http.server 8974 &   -- also works, just uses the slower portable path
 ```
-Real, verified result: downloads the actual 139.7MB model over the network (~35s), compiles, and
-runs real inference at 0.0079 max abs diff vs. the PyTorch-GPU reference -- matching the
-already-measured weight-only int8 B/16 accuracy exactly.
+**Real, measured result**: the threaded runtime is **14.7x faster** than the portable one
+(5361ms -> 365ms for one denoising step), with identical accuracy (7.8785e-3 max abs diff vs. the
+PyTorch-GPU reference, matching the already-measured weight-only int8 B/16 number exactly).
+`tools/litert/verify_hosted_web_demo.py` tests both configurations for real, not just the
+default -- see there and the `research-repo-bringup` skill for the full writeup of why the
+threaded path needs two specific things (COOP/COEP response headers, and same-origin WASM files
+since the threaded build spawns real cross-origin-rejecting `Worker()`s) and why `serve_threaded.py`
+provides them.
