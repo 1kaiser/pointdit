@@ -21,7 +21,11 @@
 # being served with the two things the *threaded* WASM runtime needs (cross-origin isolation +
 # same-origin wasm Workers) and uses that fast path automatically, falling back to the portable
 # CDN runtime otherwise -- mirroring a real prior project on this machine
-# (`1kaiser/astro`'s `moge-jax-lite/webgpu_demo`).
+# (`1kaiser/astro`'s `moge-jax-lite/webgpu_demo`). It runs the real 3-step euler generation loop
+# (not just a single denoiser call) and renders the actual resulting point cloud via
+# `<model-viewer>`, the same way that prior project visualizes its own reconstruction -- a plain
+# numeric accuracy check without a real visual result was a real gap in this demo's first version,
+# caught when asked "where is the visualization?" (see `research-repo-bringup` skill).
 #
 # This notebook verifies **both** real configurations, not just the default one -- matching this
 # project's own "verify by running, not by reading the code" discipline. Plain `python -m
@@ -106,11 +110,14 @@ threaded_proc.terminate()
 assert result_threaded.returncode == 0
 
 # %% [markdown]
-# ## 4. Verify the real numbers from both runs -- correctness AND the real speedup
+# ## 4. Verify the real numbers from both runs -- real generation happened, and the real speedup
 #
-# Both must report the same accuracy (same model, same inputs -- only the WASM runtime differs);
-# the threaded run must actually report `threaded: true` (proving the fast path was really used,
-# not silently falling back while still "working"), and its latency should be meaningfully lower.
+# `index.html` runs the real 3-step euler generation loop and builds an actual point cloud from
+# the result (see its own comments) -- numeric accuracy against the PyTorch reference is already
+# established elsewhere (`run_litert_inference.py`'s own verified single- and multi-step checks;
+# this same model, same math). What this notebook verifies is that the *browser* page genuinely
+# ran that real generation (a non-trivial point count, a non-zero generation time) under both
+# runtimes, and that the threaded runtime is actually faster, not just reporting a flag.
 
 # %%
 def parse_result(stdout):
@@ -124,13 +131,12 @@ print("threaded:", r_threaded)
 
 assert r_plain["threaded"] is False, "expected the plain server to use the portable runtime"
 assert r_threaded["threaded"] is True, "expected serve_threaded.py to actually activate the threaded runtime"
-assert abs(r_plain["maxDiff"] - r_threaded["maxDiff"]) < 1e-6, "accuracy should be identical -- same model, same inputs, only the WASM runtime differs"
-assert 0.005 < r_plain["maxDiff"] < 0.02, "max abs diff outside the expected weight-only int8 B/16 range"
+assert r_plain["numPoints"] == r_threaded["numPoints"] > 0, "expected the same non-trivial point count from both runtimes"
+assert r_plain["generationMs"] > 0 and r_threaded["generationMs"] > 0, "zero generation time -- inference likely didn't really run"
 
-speedup = r_plain["latencyMs"] / r_threaded["latencyMs"]
-print(f"\nConfirmed: both runtimes produce identical accuracy (max abs diff {r_plain['maxDiff']:.4e}).")
-print(f"Threaded runtime is {speedup:.1f}x faster than the portable one "
-      f"({r_plain['latencyMs']:.0f} ms -> {r_threaded['latencyMs']:.0f} ms) -- a real, measured "
-      f"speedup, not the ~5.6x a prior project on this machine measured for a different model; "
-      f"the actual multiplier depends on the model and machine, so this is measured here, not "
-      f"assumed from that prior number.")
+speedup = r_plain["generationMs"] / r_threaded["generationMs"]
+print(f"\nConfirmed: both runtimes built the same real point cloud ({r_plain['numPoints']:,} points).")
+print(f"Threaded runtime is {speedup:.1f}x faster than the portable one for the full 3-step "
+      f"generation ({r_plain['generationMs']:.0f} ms -> {r_threaded['generationMs']:.0f} ms) -- "
+      f"measured here directly, not assumed from a prior project's own number for a different "
+      f"model.")

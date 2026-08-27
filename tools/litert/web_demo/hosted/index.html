@@ -1,8 +1,19 @@
 <!doctype html>
 <html>
-<head><meta charset="utf-8"><title>PointDiT-B/16 LiteRT.js web demo (hosted, no local setup)</title></head>
+<head><meta charset="utf-8"><title>PointDiT-B/16 LiteRT.js web demo (hosted, no local setup)</title>
+<style>
+  html, body { margin: 0; font-family: monospace; background: #fff; }
+  #status { padding: 8px; white-space: pre-wrap; font-size: 13px; }
+  model-viewer { width: 100%; height: 480px; background: #0a0a0b; display: none; }
+</style>
+<script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
+<script type="importmap">
+{"imports": {"three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"}}
+</script>
+</head>
 <body>
 <pre id="status">loading...</pre>
+<model-viewer id="viewer" camera-controls auto-rotate exposure="1.0" environment-image="neutral" shadow-intensity="0" alt="PointDiT reconstructed point cloud"></model-viewer>
 <script type="module">
 // Single self-contained file, no npm install and no locally-placed model needed:
 // - @litertjs/core loads from a CDN, unless the fast threaded runtime (see below) is available,
@@ -15,15 +26,22 @@
 //   anywhere other than github.com is blocked by CORS; Hugging Face's CDN sends
 //   `access-control-allow-origin: *` (checked the same way).
 //
-// This whole dual-runtime structure (threaded-if-possible, portable-fallback) mirrors a real
-// prior project on this same machine (1kaiser/astro's moge-jax-lite/webgpu_demo) -- see its
-// serve.py and index.html for the original, this is the same real mechanism adapted to
-// PointDiT's own fixed-example denoiser demo rather than a live image upload.
+// This whole dual-runtime structure (threaded-if-possible, portable-fallback), and the point
+// cloud -> GLB -> <model-viewer> visualization below, mirrors a real prior project on this same
+// machine (1kaiser/astro's moge-jax-lite/webgpu_demo) -- see its serve.py and index.html for the
+// original; this is the same real mechanism adapted to PointDiT's own fixed-example denoiser
+// (a single conditioning image, not a live upload -- DINOv3, the encoder, never runs client-side
+// in this project; see research-repo-bringup skill).
 import {loadLiteRt, loadAndCompile, Tensor, setWebGpuDevice} from 'https://cdn.jsdelivr.net/npm/@litertjs/core@2.5.3/+esm';
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
+import {GLTFExporter} from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/exporters/GLTFExporter.js';
 
 const MODEL_URL = 'https://huggingface.co/1kaiser/pointdit-litert/resolve/main/pointdit_b16_denoiser_step_weightonly.tflite';
+const NUM_STEPS = 3;          // matches this checkpoint's own --num_sampling_steps
+const GENERATE_NOISE_SCALE = 0.0; // matches PointDiT's own real default (denoiser.py generate())
 
 const statusEl = document.getElementById('status');
+const viewerEl = document.getElementById('viewer');
 function log(msg) {
   console.log(msg);
   statusEl.textContent += '\n' + msg;
@@ -34,18 +52,7 @@ async function fetchFloat32(path) {
   return new Float32Array(buf);
 }
 
-// The *threaded* XNNPACK build runs this CPU-bound model meaningfully faster than the portable
-// single-threaded build (see README/skill for the real measured numbers), because most of
-// PointDiT's ops run on CPU regardless of whether a GPU delegate is active. It has two hard,
-// real requirements, both checked here at runtime -- neither is optional, and there's no
-// partial/degraded threaded mode, only "works" or "falls back cleanly":
-//   1. cross-origin isolation (COOP/COEP response headers -> real SharedArrayBuffer support) --
-//      a plain `python -m http.server` does NOT send these; a companion server that does
-//      (serve_threaded.py, next to this file) is what actually enables this path.
-//   2. same-origin wasm files -- the threaded runtime spawns real Worker()s internally, and
-//      Workers reject cross-origin (CDN) script URLs outright; the CDN copy genuinely cannot be
-//      used for this path, which is why ./wasm/*.internal.{js,wasm} are committed alongside this
-//      page rather than fetched from jsdelivr like the portable path's wasm.
+// (same threaded/portable dual-runtime logic as before -- unchanged)
 async function loadRuntime() {
   if (crossOriginIsolated) {
     try {
@@ -60,9 +67,6 @@ async function loadRuntime() {
     log('crossOriginIsolated: false (served without COOP/COEP headers, e.g. plain http.server) '
       + '-- using the portable CDN runtime. See serve_threaded.py for the fast path.');
   }
-  // Portable path: works on any static host, no special headers, no local files needed at all.
-  // {jspi:true} -- the JS-Promise-Integration build, not Emscripten's Asyncify polyfill (fixes a
-  // real "Asyncify is not defined" error hit earlier building this project's demos).
   await loadLiteRt('https://cdn.jsdelivr.net/npm/@litertjs/core@2.5.3/wasm/', {jspi: true});
   return false;
 }
@@ -71,10 +75,6 @@ async function main() {
   const shapes = await (await fetch('./assets_b16/shapes.json')).json();
   log('shapes: ' + JSON.stringify(shapes));
 
-  // Real WebGPU adapter cold-start retry -- requestAdapter() can transiently return null on the
-  // very first call in a fresh page (see headless-chrome-webgpu skill); a plain retry loop fixes
-  // it. Not actually used for compute here (see accelerator choice below) but reported for
-  // parity with this project's other demos.
   let adapterInfo = 'no navigator.gpu';
   if (navigator.gpu) {
     for (let i = 0; i < 5; i++) {
@@ -90,13 +90,7 @@ async function main() {
   log('WebGPU adapter: ' + adapterInfo);
 
   const threaded = await loadRuntime();
-
-  // 'wasm', never 'webgpu' -- the WebGPU delegate's rank<=4 op limit crashes on this model's
-  // attention reshapes (see research-repo-bringup skill). This holds for both runtimes: the
-  // threaded build has no JSPI/Asyncify plumbing at all (threads and webgpu are mutually
-  // exclusive in this library's shipped builds), and the portable build hits the rank-limit
-  // crash directly -- 'wasm' is the real working accelerator either way, not a fallback of
-  // convenience.
+  // 'wasm', never 'webgpu' -- see research-repo-bringup skill (rank<=4 delegate limit crash).
   const accelerator = 'wasm';
 
   log(`downloading model from ${MODEL_URL} ...`);
@@ -111,47 +105,93 @@ async function main() {
   const model = await loadAndCompile(modelBytes, {accelerator});
   log(`model compiled in ${(performance.now() - t1).toFixed(1)} ms`);
 
-  const [z, t, labels, cached_y_emb, ref_output] = await Promise.all(
-    ['z', 't', 'labels', 'cached_y_emb', 'ref_output'].map(n => fetchFloat32(`./assets_b16/${n}.bin`)));
+  // labels/cached_y_emb are the real conditioning image + its frozen DINOv3 encoding (computed
+  // offline in Python -- see export_web_demo_inputs_b16.py -- since DINOv3 doesn't run
+  // client-side). z/t/ref_output (a single-call accuracy check) are NOT reused here: a real
+  // multi-step *generation* starts from z=GENERATE_NOISE_SCALE*randn at t=0, not the fixed t=0.3
+  // single-call input those files hold.
+  const [labels, cached_y_emb] = await Promise.all(
+    ['labels', 'cached_y_emb'].map(n => fetchFloat32(`./assets_b16/${n}.bin`)));
+  const labelsTensor = new Tensor(labels, shapes.labels);
+  const cachedYEmbTensor = new Tensor(cached_y_emb, shapes.cached_y_emb);
 
-  const inputs = {
-    args_0: new Tensor(z, shapes.z),
-    args_1: new Tensor(t, shapes.t),
-    args_2: new Tensor(labels, shapes.labels),
-    cached_y_emb: new Tensor(cached_y_emb, shapes.cached_y_emb),
-  };
+  // The real euler-integration sampling loop -- denoiser.py's Denoiser.generate() /
+  // _euler_step() / _forward_sample(), ported verbatim (same structure already verified in
+  // tools/litert/run_litert_inference.py's litert_generate() against the real PyTorch output;
+  // this is the identical math, in JS, calling the same compiled LiteRT model instead of a
+  // Python interpreter).
+  const [, C, H, W] = shapes.labels;
+  let z = new Float32Array(C * H * W).fill(0); // GENERATE_NOISE_SCALE=0.0 -> starts at all-zeros
+  const timesteps = Array.from({length: NUM_STEPS + 1}, (_, i) => i / NUM_STEPS);
 
-  log('running warmup call...');
-  let warm = await model.run(inputs);
-  for (const k in warm) warm[k].delete();
-
-  log('running timed call...');
-  const t2 = performance.now();
-  const results = await model.run(inputs);
-  const elapsed = performance.now() - t2;
-  log(`inference latency: ${elapsed.toFixed(1)} ms (${threaded ? 'threaded' : 'portable'} runtime)`);
-
-  const outKey = Object.keys(results)[0];
-  const outTensorCpu = await results[outKey].moveTo('wasm');
-  const outArr = outTensorCpu.toTypedArray();
-
-  let maxDiff = 0, sumDiff = 0;
-  for (let i = 0; i < outArr.length; i++) {
-    const d = Math.abs(outArr[i] - ref_output[i]);
-    if (d > maxDiff) maxDiff = d;
-    sumDiff += d;
+  function denoiserStep(zArr, tScalar) {
+    const zTensor = new Tensor(zArr, [1, C, H, W]);
+    const tTensor = new Tensor(new Float32Array([tScalar]), [1]);
+    const inputs = {args_0: zTensor, args_1: tTensor, args_2: labelsTensor, cached_y_emb: cachedYEmbTensor};
+    return model.run(inputs).then(async (results) => {
+      const outKey = Object.keys(results)[0];
+      const outCpu = await results[outKey].moveTo('wasm');
+      const outArr = outCpu.toTypedArray().slice();
+      zTensor.delete(); tTensor.delete(); outCpu.delete();
+      for (const k in results) results[k].delete();
+      return outArr;
+    });
   }
-  log(`output length: ${outArr.length} (expected ${ref_output.length})`);
-  log(`max abs diff vs PyTorch-GPU reference: ${maxDiff.toExponential(4)}`);
-  log(`mean abs diff: ${(sumDiff / outArr.length).toExponential(4)}`);
 
-  for (const k in inputs) inputs[k].delete();
-  for (const k in results) results[k].delete();
-  outTensorCpu.delete();
+  log(`running ${NUM_STEPS}-step generation...`);
+  const tGen0 = performance.now();
+  for (let i = 0; i < NUM_STEPS; i++) {
+    const t = timesteps[i], tNext = timesteps[i + 1];
+    const xCond = await denoiserStep(z, t);
+    const vScale = (tNext - t) / Math.max(1.0 - t, 1e-12);
+    const nextZ = new Float32Array(z.length);
+    for (let j = 0; j < z.length; j++) nextZ[j] = z[j] + vScale * (xCond[j] - z[j]);
+    z = nextZ;
+  }
+  const elapsed = performance.now() - tGen0;
+  log(`generation done in ${elapsed.toFixed(1)} ms (${threaded ? 'threaded' : 'portable'} runtime, ${NUM_STEPS} steps)`);
+
+  // z is now the real reconstructed point map: (C=3, H, W), channel order X,Y,Z (Z=depth). Build
+  // a real point cloud from it -- same axis flip PointDiT's own Python export uses
+  // (util/viz_pointcloud.py's transform_to_gl: flip Y and Z) to reach the OpenGL/glTF
+  // right-handed convention this project's other GLB exports already use.
+  const stride = 2; // subsample for a responsive viewer, same as the moge-web reference
+  const positions = [];
+  const colors = [];
+  for (let row = 0; row < H; row += stride) {
+    for (let col = 0; col < W; col += stride) {
+      const idx = row * W + col;
+      const x = z[0 * H * W + idx];
+      const y = z[1 * H * W + idx];
+      const depth = z[2 * H * W + idx];
+      positions.push(x, -y, -depth);
+      const li = idx * 3; // labels is NCHW too: channel-major, same idx layout as z
+      const r = (labels[0 * H * W + idx] + 1) / 2; // labels are in [-1, 1]
+      const g = (labels[1 * H * W + idx] + 1) / 2;
+      const b = (labels[2 * H * W + idx] + 1) / 2;
+      colors.push(r, g, b);
+    }
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
+  geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(colors), 3));
+  const material = new THREE.PointsMaterial({size: 0.01, vertexColors: true});
+  const pointCloud = new THREE.Points(geometry, material);
+
+  const exporter = new GLTFExporter();
+  const glbBuffer = await new Promise((resolve, reject) => {
+    exporter.parse(pointCloud, resolve, reject, {binary: true});
+  });
+  const glbBlob = new Blob([glbBuffer], {type: 'model/gltf-binary'});
+  const glbUrl = URL.createObjectURL(glbBlob);
+  viewerEl.src = glbUrl;
+  viewerEl.style.display = 'block';
+  log(`built point cloud: ${positions.length / 3} points, rendered below`);
 
   statusEl.textContent += '\nDONE';
   window.__demoDone = true;
-  window.__demoResult = {adapterInfo, threaded, latencyMs: elapsed, maxDiff, meanDiff: sumDiff / outArr.length};
+  window.__demoResult = {adapterInfo, threaded, generationMs: elapsed, numPoints: positions.length / 3};
 }
 
 main().catch(err => {

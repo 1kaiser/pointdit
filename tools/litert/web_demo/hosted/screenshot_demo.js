@@ -13,6 +13,8 @@ async function main() {
     ],
   });
   const page = await browser.newPage({ viewport: { width: 900, height: 500 } });
+  page.on('console', (msg) => console.log('[console]', msg.text()));
+  page.on('pageerror', (err) => console.log('[pageerror]', err.message));
   await page.goto(url, { waitUntil: 'load', timeout: 30000 });
   await page.waitForFunction(() => window.__demoDone === true, undefined, { timeout: 120000 });
   await page.screenshot({ path: outPng });
