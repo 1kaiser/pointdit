@@ -146,3 +146,32 @@ skill for the full writeup of why the threaded path needs two specific things (C
 headers, and same-origin WASM files since the threaded build spawns real cross-origin-rejecting
 `Worker()`s) and why `serve_threaded.py`
 provides them.
+
+### Using your own photo (requires legitimate DINOv3 access)
+
+The demo above always reconstructs the same bundled example, because DINOv3 (the frozen encoder
+that actually conditions the generation on *which* image) never runs client-side by default.
+Real, checked-not-assumed finding: the public
+[`onnx-community/dinov3-vitb16-pretrain-lvd1689m-ONNX`](https://huggingface.co/onnx-community/dinov3-vitb16-pretrain-lvd1689m-ONNX)
+export only exposes `last_hidden_state` (its graph's actual output list has no others) -- not the
+4 equally-spaced intermediate layers this exact checkpoint was trained to condition on
+(`dinov3_use_intermediate_layers=True`, `n=4`, concatenated to 768x4=3072 -- matching
+`cached_y_emb`'s real shape). Not a drop-in match.
+
+```bash
+# needs legitimate DINOv3 access already (see main README Installation) --
+# this re-serializes the gated weights into ONNX, so the output is local-only, never committed:
+python3 tools/litert/export_dinov3_onnx.py
+```
+This writes `tools/litert/web_demo/hosted/dinov3_vitb16_intermediate.onnx` (gitignored,
+~340MB, embeds Meta's gated weights -- treat exactly like `pretrained/dinov3/*.pth`). Once it's
+present, `index.html` detects it (a real `HEAD` request, not assumed) and shows a file input --
+uploading a photo runs real DINOv3 inference via `onnxruntime-web`, then real PointDiT generation
+on the result, both client-side. Verified end-to-end with a real, different image: DINOv3 in
+2118ms, generation in 1130ms, a genuinely different reconstruction than the bundled default
+(confirmed by eye, not just by non-zero numbers).
+
+`pos_embed_y.bin` (committed, no gating question at all) is the other real input this needs --
+a fixed, non-trained sin-cos function of the patch grid (`requires_grad=False`), exported as the
+real computed tensor rather than reimplemented from the formula in JS: a hand reconstruction was
+tried while building this and was subtly wrong (86.7 max diff vs. 2.4e-4 using the real values).
