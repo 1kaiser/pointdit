@@ -5,6 +5,8 @@
   html, body { margin: 0; font-family: monospace; background: #fff; }
   #status { padding: 8px; white-space: pre-wrap; font-size: 13px; }
   model-viewer { width: 100%; height: 480px; background: #0a0a0b; display: none; }
+  #controls { padding: 8px; }
+  #controls button { font-family: monospace; }
 </style>
 <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
 <script type="importmap">
@@ -13,32 +15,40 @@
 </head>
 <body>
 <pre id="status">loading...</pre>
+<div id="controls" style="display:none">
+  <label>Use your own photo (requires <code>dinov3_vitb16_intermediate.onnx</code> generated
+  locally via <code>export_dinov3_onnx.py</code> -- see tools/litert/README.md):
+  <input type="file" id="imageInput" accept="image/*"></label>
+</div>
 <model-viewer id="viewer" camera-controls auto-rotate exposure="1.0" environment-image="neutral" shadow-intensity="0" alt="PointDiT reconstructed point cloud"></model-viewer>
 <script type="module">
-// Single self-contained file, no npm install and no locally-placed model needed:
-// - @litertjs/core loads from a CDN, unless the fast threaded runtime (see below) is available,
-//   in which case it loads from the ./wasm/ files committed alongside this page (same-origin --
-//   required, see loadRuntime()).
-// - the .tflite model itself is fetched at runtime from a public, CORS-open host
-//   (huggingface.co/1kaiser/pointdit-litert) rather than a local file -- verified for a real
+// Single self-contained file, no npm install needed:
+// - @litertjs/core and onnxruntime-web load from CDNs, unless the fast threaded LiteRT runtime
+//   (see below) is available, in which case it loads from the ./wasm/ files committed alongside
+//   this page (same-origin -- required, see loadRuntime()).
+// - the PointDiT denoiser .tflite model itself is fetched at runtime from a public, CORS-open
+//   host (huggingface.co/1kaiser/pointdit-litert) rather than a local file -- verified for a real
 //   reason, not copied blindly: GitHub Release assets send no Access-Control-Allow-Origin header
 //   at all (checked with `curl -I` on this repo's own release), so a page fetching one from
 //   anywhere other than github.com is blocked by CORS; Hugging Face's CDN sends
 //   `access-control-allow-origin: *` (checked the same way).
+// - the DINOv3 encoder used to condition on a NEW, user-uploaded photo is different: it embeds
+//   Meta's gated weights, so it is never hosted anywhere by this page -- see the "user-provided
+//   image" section below for the real reason and what running it actually needs.
 //
-// This whole dual-runtime structure (threaded-if-possible, portable-fallback), and the point
-// cloud -> GLB -> <model-viewer> visualization below, mirrors a real prior project on this same
-// machine (1kaiser/astro's moge-jax-lite/webgpu_demo) -- see its serve.py and index.html for the
-// original; this is the same real mechanism adapted to PointDiT's own fixed-example denoiser
-// (a single conditioning image, not a live upload -- DINOv3, the encoder, never runs client-side
-// in this project; see research-repo-bringup skill).
+// The dual-runtime structure (threaded-if-possible, portable-fallback), and the point cloud ->
+// GLB -> <model-viewer> visualization, mirror a real prior project on this same machine
+// (1kaiser/astro's moge-jax-lite/webgpu_demo) -- see its serve.py and index.html for the original.
 import {loadLiteRt, loadAndCompile, Tensor, setWebGpuDevice} from 'https://cdn.jsdelivr.net/npm/@litertjs/core@2.5.3/+esm';
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
 import {GLTFExporter} from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/exporters/GLTFExporter.js';
+import * as ort from 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/ort.min.mjs';
 
 const MODEL_URL = 'https://huggingface.co/1kaiser/pointdit-litert/resolve/main/pointdit_b16_denoiser_step_weightonly.tflite';
 const NUM_STEPS = 3;          // matches this checkpoint's own --num_sampling_steps
 const GENERATE_NOISE_SCALE = 0.0; // matches PointDiT's own real default (denoiser.py generate())
+const IMG_SIZE = 512;
+const DINOV3_INTERMEDIATE_INDICES = [2, 5, 8, 11]; // n=4 equally-spaced layers, dinov3-vitb16 (depth=12)
 
 const statusEl = document.getElementById('status');
 const viewerEl = document.getElementById('viewer');
@@ -69,6 +79,127 @@ async function loadRuntime() {
   }
   await loadLiteRt('https://cdn.jsdelivr.net/npm/@litertjs/core@2.5.3/wasm/', {jspi: true});
   return false;
+}
+
+// Draw an <img> to an IMG_SIZE x IMG_SIZE canvas and return {chw01, chwNeg1to1}: the same pixel
+// grid in both a plain [0,1] RGB layout (for get_intermediate_layers -- ImageNet-normalized
+// inside the exported ONNX graph itself, see export_dinov3_onnx.py's wrapper) and PointDiT's own
+// [-1,1] "labels" layout (channel-major, matching the .bin assets this page already used).
+function imageToTensors(imgEl) {
+  const canvas = document.createElement('canvas');
+  canvas.width = IMG_SIZE; canvas.height = IMG_SIZE;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(imgEl, 0, 0, IMG_SIZE, IMG_SIZE);
+  const {data} = ctx.getImageData(0, 0, IMG_SIZE, IMG_SIZE); // RGBA, HWC, uint8
+  const n = IMG_SIZE * IMG_SIZE;
+  const chw01 = new Float32Array(3 * n);
+  const labels = new Float32Array(3 * n);
+  for (let i = 0; i < n; i++) {
+    for (let c = 0; c < 3; c++) {
+      const v01 = data[i * 4 + c] / 255;
+      chw01[c * n + i] = v01;
+      labels[c * n + i] = v01 * 2 - 1;
+    }
+  }
+  return {chw01, labels};
+}
+
+// Real DINOv3 conditioning for a NEW image: get_intermediate_layers(n=[2,5,8,11], norm=True),
+// concatenated -- exactly export_dinov3_onnx.py's wrapper, run here via onnxruntime-web instead
+// of Python. This needs a *locally generated* ONNX file (never hosted -- it embeds Meta's gated
+// DINOv3 weights, same treatment as pretrained/dinov3/*.pth); PORTED, not baked into this page's
+// remotely-fetched assets.
+async function computeYEmbedding(chw01) {
+  const onnxSession = await ort.InferenceSession.create('./dinov3_vitb16_intermediate.onnx', {
+    executionProviders: ['wasm'],
+  });
+  const inputTensor = new ort.Tensor('float32', chw01, [1, 3, IMG_SIZE, IMG_SIZE]);
+  const t0 = performance.now();
+  const outputs = await onnxSession.run({pixel_values: inputTensor});
+  log(`DINOv3 (onnxruntime-web) ran in ${(performance.now() - t0).toFixed(0)} ms`);
+  const yEmbNoPos = outputs.y_emb.data; // Float32Array, DINOv3-only, before pos_embed_y
+  const posEmbedY = await fetchFloat32('./pos_embed_y.bin');
+  const yEmb = new Float32Array(yEmbNoPos.length);
+  for (let i = 0; i < yEmb.length; i++) yEmb[i] = yEmbNoPos[i] + posEmbedY[i];
+  return yEmb;
+}
+
+// The real euler-integration sampling loop -- denoiser.py's Denoiser.generate() / _euler_step() /
+// _forward_sample(), ported verbatim (same structure already verified in
+// tools/litert/run_litert_inference.py's litert_generate() against the real PyTorch output).
+async function generateAndVisualize(model, labels, cachedYEmb, shapes, threaded) {
+  const labelsTensor = new Tensor(labels, shapes.labels);
+  const cachedYEmbTensor = new Tensor(cachedYEmb, shapes.cached_y_emb);
+  const [, C, H, W] = shapes.labels;
+  let z = new Float32Array(C * H * W).fill(0); // GENERATE_NOISE_SCALE=0.0 -> starts at all-zeros
+  const timesteps = Array.from({length: NUM_STEPS + 1}, (_, i) => i / NUM_STEPS);
+
+  function denoiserStep(zArr, tScalar) {
+    const zTensor = new Tensor(zArr, [1, C, H, W]);
+    const tTensor = new Tensor(new Float32Array([tScalar]), [1]);
+    const inputs = {args_0: zTensor, args_1: tTensor, args_2: labelsTensor, cached_y_emb: cachedYEmbTensor};
+    return model.run(inputs).then(async (results) => {
+      const outKey = Object.keys(results)[0];
+      const outCpu = await results[outKey].moveTo('wasm');
+      const outArr = outCpu.toTypedArray().slice();
+      zTensor.delete(); tTensor.delete(); outCpu.delete();
+      for (const k in results) results[k].delete();
+      return outArr;
+    });
+  }
+
+  log(`running ${NUM_STEPS}-step generation...`);
+  const tGen0 = performance.now();
+  for (let i = 0; i < NUM_STEPS; i++) {
+    const t = timesteps[i], tNext = timesteps[i + 1];
+    const xCond = await denoiserStep(z, t);
+    const vScale = (tNext - t) / Math.max(1.0 - t, 1e-12);
+    const nextZ = new Float32Array(z.length);
+    for (let j = 0; j < z.length; j++) nextZ[j] = z[j] + vScale * (xCond[j] - z[j]);
+    z = nextZ;
+  }
+  const elapsed = performance.now() - tGen0;
+  log(`generation done in ${elapsed.toFixed(1)} ms (${threaded ? 'threaded' : 'portable'} runtime, ${NUM_STEPS} steps)`);
+  labelsTensor.delete(); cachedYEmbTensor.delete();
+
+  // z is now the real reconstructed point map: (C=3, H, W), channel order X,Y,Z (Z=depth). Build
+  // a real point cloud from it -- same axis flip PointDiT's own Python export uses
+  // (util/viz_pointcloud.py's transform_to_gl: flip Y and Z) to reach the OpenGL/glTF
+  // right-handed convention this project's other GLB exports already use.
+  const stride = 2; // subsample for a responsive viewer, same as the moge-web reference
+  const positions = [];
+  const colors = [];
+  for (let row = 0; row < H; row += stride) {
+    for (let col = 0; col < W; col += stride) {
+      const idx = row * W + col;
+      const x = z[0 * H * W + idx];
+      const y = z[1 * H * W + idx];
+      const depth = z[2 * H * W + idx];
+      positions.push(x, -y, -depth);
+      const r = (labels[0 * H * W + idx] + 1) / 2; // labels are in [-1, 1]
+      const g = (labels[1 * H * W + idx] + 1) / 2;
+      const b = (labels[2 * H * W + idx] + 1) / 2;
+      colors.push(r, g, b);
+    }
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
+  geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(colors), 3));
+  const material = new THREE.PointsMaterial({size: 0.01, vertexColors: true});
+  const pointCloud = new THREE.Points(geometry, material);
+
+  const exporter = new GLTFExporter();
+  const glbBuffer = await new Promise((resolve, reject) => {
+    exporter.parse(pointCloud, resolve, reject, {binary: true});
+  });
+  const glbBlob = new Blob([glbBuffer], {type: 'model/gltf-binary'});
+  if (viewerEl.src) URL.revokeObjectURL(viewerEl.src);
+  viewerEl.src = URL.createObjectURL(glbBlob);
+  viewerEl.style.display = 'block';
+  log(`built point cloud: ${positions.length / 3} points, rendered below`);
+
+  return {generationMs: elapsed, numPoints: positions.length / 3};
 }
 
 async function main() {
@@ -105,93 +236,48 @@ async function main() {
   const model = await loadAndCompile(modelBytes, {accelerator});
   log(`model compiled in ${(performance.now() - t1).toFixed(1)} ms`);
 
-  // labels/cached_y_emb are the real conditioning image + its frozen DINOv3 encoding (computed
-  // offline in Python -- see export_web_demo_inputs_b16.py -- since DINOv3 doesn't run
-  // client-side). z/t/ref_output (a single-call accuracy check) are NOT reused here: a real
-  // multi-step *generation* starts from z=GENERATE_NOISE_SCALE*randn at t=0, not the fixed t=0.3
-  // single-call input those files hold.
-  const [labels, cached_y_emb] = await Promise.all(
+  // Default: labels/cached_y_emb for the bundled example (its DINOv3 encoding was computed
+  // offline in Python -- see export_web_demo_inputs_b16.py). Real generation always starts from
+  // z=GENERATE_NOISE_SCALE*randn at t=0, not the fixed t=0.3 single-call inputs the ref_output.bin
+  // check elsewhere in this project uses.
+  const [labels, cachedYEmb] = await Promise.all(
     ['labels', 'cached_y_emb'].map(n => fetchFloat32(`./assets_b16/${n}.bin`)));
-  const labelsTensor = new Tensor(labels, shapes.labels);
-  const cachedYEmbTensor = new Tensor(cached_y_emb, shapes.cached_y_emb);
 
-  // The real euler-integration sampling loop -- denoiser.py's Denoiser.generate() /
-  // _euler_step() / _forward_sample(), ported verbatim (same structure already verified in
-  // tools/litert/run_litert_inference.py's litert_generate() against the real PyTorch output;
-  // this is the identical math, in JS, calling the same compiled LiteRT model instead of a
-  // Python interpreter).
-  const [, C, H, W] = shapes.labels;
-  let z = new Float32Array(C * H * W).fill(0); // GENERATE_NOISE_SCALE=0.0 -> starts at all-zeros
-  const timesteps = Array.from({length: NUM_STEPS + 1}, (_, i) => i / NUM_STEPS);
-
-  function denoiserStep(zArr, tScalar) {
-    const zTensor = new Tensor(zArr, [1, C, H, W]);
-    const tTensor = new Tensor(new Float32Array([tScalar]), [1]);
-    const inputs = {args_0: zTensor, args_1: tTensor, args_2: labelsTensor, cached_y_emb: cachedYEmbTensor};
-    return model.run(inputs).then(async (results) => {
-      const outKey = Object.keys(results)[0];
-      const outCpu = await results[outKey].moveTo('wasm');
-      const outArr = outCpu.toTypedArray().slice();
-      zTensor.delete(); tTensor.delete(); outCpu.delete();
-      for (const k in results) results[k].delete();
-      return outArr;
-    });
-  }
-
-  log(`running ${NUM_STEPS}-step generation...`);
-  const tGen0 = performance.now();
-  for (let i = 0; i < NUM_STEPS; i++) {
-    const t = timesteps[i], tNext = timesteps[i + 1];
-    const xCond = await denoiserStep(z, t);
-    const vScale = (tNext - t) / Math.max(1.0 - t, 1e-12);
-    const nextZ = new Float32Array(z.length);
-    for (let j = 0; j < z.length; j++) nextZ[j] = z[j] + vScale * (xCond[j] - z[j]);
-    z = nextZ;
-  }
-  const elapsed = performance.now() - tGen0;
-  log(`generation done in ${elapsed.toFixed(1)} ms (${threaded ? 'threaded' : 'portable'} runtime, ${NUM_STEPS} steps)`);
-
-  // z is now the real reconstructed point map: (C=3, H, W), channel order X,Y,Z (Z=depth). Build
-  // a real point cloud from it -- same axis flip PointDiT's own Python export uses
-  // (util/viz_pointcloud.py's transform_to_gl: flip Y and Z) to reach the OpenGL/glTF
-  // right-handed convention this project's other GLB exports already use.
-  const stride = 2; // subsample for a responsive viewer, same as the moge-web reference
-  const positions = [];
-  const colors = [];
-  for (let row = 0; row < H; row += stride) {
-    for (let col = 0; col < W; col += stride) {
-      const idx = row * W + col;
-      const x = z[0 * H * W + idx];
-      const y = z[1 * H * W + idx];
-      const depth = z[2 * H * W + idx];
-      positions.push(x, -y, -depth);
-      const li = idx * 3; // labels is NCHW too: channel-major, same idx layout as z
-      const r = (labels[0 * H * W + idx] + 1) / 2; // labels are in [-1, 1]
-      const g = (labels[1 * H * W + idx] + 1) / 2;
-      const b = (labels[2 * H * W + idx] + 1) / 2;
-      colors.push(r, g, b);
-    }
-  }
-
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
-  geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(colors), 3));
-  const material = new THREE.PointsMaterial({size: 0.01, vertexColors: true});
-  const pointCloud = new THREE.Points(geometry, material);
-
-  const exporter = new GLTFExporter();
-  const glbBuffer = await new Promise((resolve, reject) => {
-    exporter.parse(pointCloud, resolve, reject, {binary: true});
-  });
-  const glbBlob = new Blob([glbBuffer], {type: 'model/gltf-binary'});
-  const glbUrl = URL.createObjectURL(glbBlob);
-  viewerEl.src = glbUrl;
-  viewerEl.style.display = 'block';
-  log(`built point cloud: ${positions.length / 3} points, rendered below`);
-
-  statusEl.textContent += '\nDONE';
+  const result = await generateAndVisualize(model, labels, cachedYEmb, shapes, threaded);
+  statusEl.textContent += '\nDONE (bundled example)';
   window.__demoDone = true;
-  window.__demoResult = {adapterInfo, threaded, generationMs: elapsed, numPoints: positions.length / 3};
+  window.__demoResult = {adapterInfo, threaded, ...result};
+
+  // User-provided image: only offered if a locally-generated DINOv3 ONNX export is actually
+  // present (checked with a real request, not assumed) -- most people running this page will not
+  // have it, since it embeds gated weights and is never hosted (see export_dinov3_onnx.py).
+  let onnxAvailable = false;
+  try {
+    const head = await fetch('./dinov3_vitb16_intermediate.onnx', {method: 'HEAD'});
+    onnxAvailable = head.ok;
+  } catch (e) { /* not present */ }
+
+  if (onnxAvailable) {
+    document.getElementById('controls').style.display = 'block';
+    log('\nFound a local DINOv3 ONNX export -- "use your own photo" is available below.');
+    document.getElementById('imageInput').addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const img = new Image();
+      img.src = URL.createObjectURL(file);
+      await new Promise((resolve) => { img.onload = resolve; });
+      log(`\n--- running on uploaded image: ${file.name} ---`);
+      const {chw01, labels: newLabels} = imageToTensors(img);
+      const newCachedYEmb = await computeYEmbedding(chw01);
+      const newResult = await generateAndVisualize(model, newLabels, newCachedYEmb, shapes, threaded);
+      log('DONE (uploaded image)');
+      window.__demoResult = {adapterInfo, threaded, ...newResult, uploadedImage: file.name};
+    });
+  } else {
+    log('\nNo local DINOv3 ONNX export found -- "use your own photo" is unavailable on this page '
+      + '(see tools/litert/README.md to generate one; it is never hosted since it embeds gated '
+      + 'weights, so most visitors of this page will not have it).');
+  }
 }
 
 main().catch(err => {
